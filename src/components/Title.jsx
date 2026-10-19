@@ -86,7 +86,7 @@ function Title({ onSelectRegularQuiz, onSelectSkyView, onSelectStudy, onSelectUn
                         </ul>
 
                         <p className="github-link">
-                            <a href="https://github.com/cozenom/Constellation_Quiz" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+                            <a href="https://github.com/cozenom/star-quiz" target="_blank" rel="noopener noreferrer">View on GitHub</a>
                         </p>
 
                         <button className="close-button" onClick={() => setShowAbout(false)}>Close</button>

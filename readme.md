@@ -62,7 +62,7 @@ npm run deploy
 # First deployment: Enable GitHub Pages in repo settings
 # Settings → Pages → Source: gh-pages branch → Save
 
-# Access at: https://[username].github.io/Constellation_Quiz
+# Access at: https://cozenom.github.io/star-quiz/
 
 # Future deployments: Just run npm run deploy
 ```

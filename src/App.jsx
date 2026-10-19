@@ -14,7 +14,7 @@ const Universe3D = lazy(() => import('./components/Universe3D'));
 import KeybindsPanel from './components/KeybindsPanel';
 import StarField from './components/StarField';
 
-// Hash routing: each screen has a URL like /Constellation_Quiz/#/study, so
+// Hash routing: each screen has a URL like /star-quiz/#/study, so
 // Back/Forward, refresh and direct links work (no server rewrites needed)
 const SCREEN_HASHES = {
     'title': '#/',
