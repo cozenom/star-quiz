@@ -1,4 +1,5 @@
 import React from 'react';
+import { moonPhase } from '../utils/planets';
 import { KM_PER_AU } from '../utils/universe3d';
 
 // Uses the star card's styles (.star-info-*)
@@ -28,11 +29,15 @@ function formatDays(d) {
     return `${fmt(d / 365.25)} years`;
 }
 
-function PlanetInfoCard({ body, distances, onClose, onFlyTo }) {
+const formatDate = (date) => date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+// time: the clock (ms), for our Moon's phase
+function PlanetInfoCard({ body, distances, time, onClose, onFlyTo }) {
     const f = body.facts;
     const isSun = body.id === 'Sun';
     const map = body.surfaceMap;
     const subtitle = f.parent ? `${TYPE_LABELS[f.type]} of ${f.parent}` : TYPE_LABELS[f.type];
+    const phase = body.id === 'Moon' ? moonPhase(new Date(time)) : null;
 
     return (
         <div className="star-info">
@@ -62,6 +67,19 @@ function PlanetInfoCard({ body, distances, onClose, onFlyTo }) {
                     <>
                         <dt>From the Sun</dt>
                         <dd>{formatAu(distances.sun)} <span className="star-info-muted">now</span></dd>
+                    </>
+                )}
+
+                {phase && (
+                    <>
+                        <dt>Phase</dt>
+                        <dd>
+                            {phase.name} <span className="star-info-muted">· {Math.round(phase.lit * 100)}% lit</span>
+                            {phase.ageDays !== null && (
+                                <div className="star-info-muted">{phase.ageDays.toFixed(1)} days since new Moon</div>
+                            )}
+                            <div className="star-info-muted">{phase.next.name}: {formatDate(phase.next.date)}</div>
+                        </dd>
                     </>
                 )}
 

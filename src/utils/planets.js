@@ -7,7 +7,7 @@
 // (x, y, z) -> (x, z, -y). Checked against Skyfield + DE421 by
 // scripts/check-planets.js.
 
-import { Body, GeoMoon, HelioVector, RotationAxis } from 'astronomy-engine';
+import { Body, GeoMoon, HelioVector, Illumination, MoonPhase, RotationAxis, SearchMoonPhase, SearchMoonQuarter } from 'astronomy-engine';
 
 // Drawn in the solar-system layer, in this order
 export const SOLAR_SYSTEM_BODIES = [
@@ -68,6 +68,31 @@ export function solarSystemPositions(date) {
 // Earth layer, where Earth is the origin.
 export function geocentricMoon(date) {
     return toScene(GeoMoon(date));
+}
+
+// The Moon's phase as seen from Earth at a Date:
+//   name      'New Moon', 'Waxing crescent', 'First quarter', ...
+//   lit       fraction of the disc lit (0-1)
+//   ageDays   days since the last new Moon
+//   next      the next new Moon, quarter or full Moon: {name, date}
+// The four main phases are instants; within PHASE_NAME_DEG of one (about
+// half a day) the Moon gets that phase's name.
+const PHASE_NAME_DEG = 6;
+const QUARTER_NAMES = ['New Moon', 'First quarter', 'Full Moon', 'Last quarter'];
+const BETWEEN_NAMES = ['Waxing crescent', 'Waxing gibbous', 'Waning gibbous', 'Waning crescent'];
+export function moonPhase(date) {
+    const angle = MoonPhase(date);  // Moon minus Sun ecliptic longitude: 0 new, 180 full
+    const quarterIndex = Math.round(angle / 90);
+    const name = Math.abs(angle - quarterIndex * 90) < PHASE_NAME_DEG
+        ? QUARTER_NAMES[quarterIndex % 4] : BETWEEN_NAMES[Math.floor(angle / 90)];
+    const lastNew = SearchMoonPhase(0, date, -32);
+    const quarter = SearchMoonQuarter(date);
+    return {
+        name,
+        lit: Illumination(Body.Moon, date).phase_fraction,
+        ageDays: lastNew ? (date.getTime() - lastNew.date.getTime()) / DAY_MS : null,
+        next: { name: QUARTER_NAMES[quarter.quarter], date: quarter.time.date },
+    };
 }
 
 // Sidereal orbital period in days, for SOLAR_SYSTEM_BODIES and 'Moon'

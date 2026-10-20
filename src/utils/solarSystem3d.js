@@ -72,10 +72,12 @@ const MOON_COLORS = {
 };
 
 // Surface maps in public/textures, by body name: equirectangular, longitude
-// 0 in the middle, east to the right. Sun, planets and our Moon: Solar
-// System Scope (CC BY 4.0; credited in the About box). Pluto and the other
-// moons: USGS / NASA maps, built by Star_Data/scripts/build_moon_textures.py
-// (which re-centres them, fills unseen areas and tints the greyscale ones).
+// 0 in the middle, east to the right. Sun and planets: Solar System Scope
+// (CC BY 4.0; credited in the About box). Our Moon: NASA's CGI Moon Kit
+// (colour + a normal map, built by Star_Data/scripts/build_lunar_textures.py).
+// Pluto and the other moons: USGS / NASA maps, built by
+// Star_Data/scripts/build_moon_textures.py (which re-centres them, fills
+// unseen areas and tints the greyscale ones).
 // Bodies without one keep their colour. The info card shows `from` (what
 // the map is made of), `by` (who made it, linked) and `note`.
 // widthPx: the maps' width, which sets how close the camera may come
@@ -107,7 +109,13 @@ export const SURFACE_MAPS = {
         note: 'A cloud-free day map, with city lights from a night map. The clouds are a separate layer '
             + 'from one snapshot, drifting slowly east: not the real weather',
     },
-    Moon: { file: '2k_moon.jpg', ...SSS, from: 'Based on NASA spacecraft images' },
+    Moon: {
+        file: 'moon_color_4k.jpg', normal: 'moon_normal_4k.jpg',
+        by: 'NASA SVS (CGI Moon Kit)', href: 'https://svs.gsfc.nasa.gov/4720', widthPx: 4096,
+        from: 'Lunar Reconnaissance Orbiter colour mosaic, with relief from its laser altimeter',
+        note: 'Relief is exaggerated 2×. The glow on the night side is earthshine (sunlight bounced off Earth), '
+            + 'brightest near new Moon; drawn far brighter than the real thing so it shows',
+    },
     Mars: { file: '2k_mars.jpg', ...SSS, from: 'Based on NASA spacecraft images' },
     Jupiter: { file: '2k_jupiter.jpg', ...SSS, from: 'Based on NASA spacecraft images', note: 'Cloud bands: they shift over weeks' },
     Saturn: { file: '2k_saturn.jpg', ...SSS, from: 'Based on NASA spacecraft images' },
@@ -153,6 +161,13 @@ const EARTH_ATMOSPHERE_SCALE = 1.025;
 // The cloud map is one snapshot; it drifts east (with the mid-latitude
 // westerlies, ~10 m/s) so time-lapses look alive. Not real weather.
 const EARTH_CLOUD_DRIFT_DEG_PER_DAY = 8;
+// Our Moon's look (see setupMoon). Its normal map holds true slopes;
+// MOON_RELIEF scales them up so craters show at the terminator.
+const MOON_RELIEF = 2;
+// Earthshine on the night side, as a fraction of full sunlight, when Earth
+// is full as seen from the Moon (at new Moon). The real thing is ~1/10,000;
+// this is a long exposure. (The scene's ambient light adds ~0.02 everywhere.)
+const MOON_EARTHSHINE = 0.06;
 // Not tidally locked (spins every ~12 h); has no map anyway
 const UNLOCKED_MOONS = new Set(['Nereid']);
 // Time step for a locked moon's direction of motion (its orbit's pole)
@@ -684,6 +699,51 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         anchor.add(atmosphere);
     };
 
+    // ---------- Our Moon: relief, lunar lighting, earthshine ----------
+    // A normal map from LRO's laser altimeter gives the relief (the colour
+    // map is pure albedo, no shadows). Sunlight follows the Lunar-Lambert
+    // law (McEwen 1991) instead of plain Lambert: the regolith reflects
+    // light back towards the Sun, so the full Moon is evenly bright to the
+    // limb rather than shaded like a ball, and the terminator stays sharp.
+    // Earthshine lights the side facing Earth, scaled by how much of
+    // Earth's day side faces the Moon. update() sets uEarthDir (world, Moon
+    // to Earth) and uEarthshine.
+    const moonUniforms = {
+        uEarthDir: { value: new THREE.Vector3(1, 0, 0) },
+        uEarthshine: { value: 0 },
+    };
+    const setupMoon = (material, surfaceMap, loads) => {
+        material.onBeforeCompile = (shader) => {
+            Object.assign(shader.uniforms, moonUniforms);
+            shader.fragmentShader = shader.fragmentShader.replace('#include <lights_lambert_pars_fragment>', `
+                #include <lights_lambert_pars_fragment>
+                uniform vec3 uEarthDir;
+                uniform float uEarthshine;
+                // Lunar-Lambert: f = 2 L mu0 / (mu0 + mu) + (1 - L) mu0, with
+                // L(phase angle) from McEwen's fit (degrees)
+                void RE_Direct_Lunar(const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in LambertMaterial material, inout ReflectedLight reflectedLight) {
+                    float mu0 = dot(geometryNormal, directLight.direction);
+                    if (mu0 <= 0.0) return;
+                    float mu = max(dot(geometryNormal, geometryViewDir), 0.0);
+                    float a = degrees(acos(clamp(dot(directLight.direction, geometryViewDir), -1.0, 1.0)));
+                    float L = clamp(1.0 + a * (-0.019 + a * (2.42e-4 - a * 1.46e-6)), 0.0, 1.0);
+                    float f = 2.0 * L * mu0 / (mu0 + mu) + (1.0 - L) * mu0;
+                    reflectedLight.directDiffuse += f * directLight.color * BRDF_Lambert(material.diffuseColor);
+                }
+                #undef RE_Direct
+                #define RE_Direct RE_Direct_Lunar
+            `).replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+                vec3 earthView = normalize((viewMatrix * vec4(uEarthDir, 0.0)).xyz);
+                reflectedLight.indirectDiffuse += uEarthshine * saturate(dot(normal, earthView)) * material.diffuseColor;
+            `);
+        };
+        loads.push(() => loadTexture(surfaceMap.normal, (t) => {
+            material.normalMap = t;
+            material.normalScale.set(MOON_RELIEF, MOON_RELIEF);
+            material.needsUpdate = true;
+        }, THREE.NoColorSpace));
+    };
+
     // Ring strips' shader uniforms, kept up to date by update(): the Sun's
     // direction, and the angles of the moons that move their edges
     const ringShading = [];  // {uniforms, strip, planetId, position (the planet's, AU), inverse (mesh rotation, inverted)}
@@ -727,6 +787,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         const dot = isSun ? null : track(makeDot(color, radiusAu, pixelRatio, parentId !== null));
         if (dot) anchor.add(dot);
         if (isEarth) setupEarth(material, mesh, anchor, radiusAu, loads);
+        if (id === 'Moon') setupMoon(material, surfaceMap, loads);
         const rings = RING_SYSTEMS[id];
         let extentAu = radiusAu;
         for (const strip of rings?.strips ?? []) {
@@ -1144,8 +1205,15 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         updateRingShading(date);
         // Our Moon's dot fades by its separation from Earth too
         if (byId.has('Moon') && byId.has('Earth')) {
-            parentOffset.subVectors(byId.get('Earth').position, byId.get('Moon').position);
+            const earth = byId.get('Earth').position;
+            parentOffset.subVectors(earth, byId.get('Moon').position);
             byId.get('Moon').dot.material.uniforms.uParentOffset.value.copy(parentOffset);
+            // Earthshine: Earth's phase angle seen from the Moon (Sun-Earth-
+            // Moon), through a Lambert sphere's phase law
+            moonUniforms.uEarthDir.value.copy(parentOffset).normalize();
+            const phaseAngle = step.copy(earth).negate().angleTo(fromPlanet.copy(parentOffset).negate());
+            moonUniforms.uEarthshine.value = MOON_EARTHSHINE
+                * (Math.sin(phaseAngle) + (Math.PI - phaseAngle) * Math.cos(phaseAngle)) / Math.PI;
         }
         for (const [planetId, { cloud, moons: list }] of clouds) {
             const parent = byId.get(planetId).position;

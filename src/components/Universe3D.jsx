@@ -1841,6 +1841,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 <PlanetInfoCard
                     body={body}
                     distances={bodyDistances}
+                    time={clockView.time}
                     onClose={() => setSelectedBody(null)}
                     onFlyTo={() => flyToBody(selectedBody)}
                 />
