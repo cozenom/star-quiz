@@ -2,15 +2,18 @@
 // in AU relative to the parent planet, in the scene frame (J2000
 // equatorial, north = +Y; see planets.js).
 //
-// Each moon is an ellipse fitted to JPL Horizons at an epoch (2026), turning
-// at a mean motion measured over a year: accurate for years around the
-// epoch, drifting slowly beyond (soonest for the small distant moons the Sun
-// perturbs). Jupiter's four big moons come from astronomy-engine instead,
-// which stays accurate for centuries (galileanPositions). Checked by
-// scripts/check-planets.js.
+// Moons with an `orbit` (most: a wave fit to JPL Horizons through time,
+// utils/waveOrbits.js) follow it: within ~50-150 km for regular moons over
+// the years their Horizons solution covers, drifting slowly past them. The
+// rest use one ellipse fitted to Horizons at an epoch (2026), turning at a
+// mean motion measured over a year: accurate for years around the epoch,
+// then drifting (Titan ~87,000 km off by 1900). Jupiter's four big moons
+// come from astronomy-engine instead, which stays accurate for centuries
+// (galileanPositions). Checked by scripts/check-planets.js.
 
-import { JupiterMoons } from 'astronomy-engine';
-import { sampleOrbit } from './planets.js';
+import { JupiterMoons, MakeTime } from 'astronomy-engine';
+import { keplerLine, sampleOrbit } from './planets.js';
+import { wavesPosition } from './waveOrbits.js';
 import { KM_PER_AU } from './universe3d.js';  // .js so node scripts can import this too
 
 const DEG = Math.PI / 180;
@@ -31,9 +34,18 @@ export function eccentricAnomaly(M, e) {
     return E;
 }
 
-// One moon (a moons.json entry) at a Date: [x, y, z] AU from its planet.
-// Elements are ICRF: rotate the orbit-plane ellipse by w, i, node.
+// One moon (a moons.json entry) at a Date: [x, y, z] AU from its planet
 export function moonPosition(m, date) {
+    if (m.orbit) {
+        const [x, y, z] = wavesPosition(m.orbit, MakeTime(date).tt);  // TT ~ TDB, as planets.js
+        return toScene(x / KM_PER_AU, y / KM_PER_AU, z / KM_PER_AU);
+    }
+    return ellipsePosition(m, date);
+}
+
+// The fixed ellipse: elements are ICRF, so rotate the orbit-plane ellipse
+// by w, i, node
+function ellipsePosition(m, date) {
     const days = date.getTime() / DAY_MS + JD_UNIX_EPOCH - m.epoch_jd;
     const M = ((((m.M + m.n * days) % 360) + 360) % 360) * DEG;
     const E = eccentricAnomaly(M, m.e);
@@ -68,9 +80,15 @@ export function galileanPositions(date) {
 export const moonPeriodDays = (m) => 360 / Math.abs(m.n);
 
 // One orbit as a closed loop around `date`, flat [x, y, z, ...] AU from the
-// planet. Points bunch up near the moon, like orbitPath in planets.js.
+// planet. Points bunch up near the moon, like orbitPath in planets.js; a
+// wave-fit moon's line is keplerLine (planets.js) on its fit, with the
+// planet's pull from the moon's own mean motion and orbit size
+// (mu = n^2 a^3: the bulge-strengthened pull it really feels).
 export function moonOrbitLoop(m, date, segments = 256) {
-    return sampleOrbit(d => moonPosition(m, d), date, moonPeriodDays(m) * DAY_MS, segments);
+    const periodMs = moonPeriodDays(m) * DAY_MS;
+    if (!m.orbit) return sampleOrbit(d => moonPosition(m, d), date, periodMs, segments);
+    const n = m.n * DEG, a = m.a_km / KM_PER_AU;
+    return keplerLine(d => moonPosition(m, d), date, periodMs, n * n * a * a * a, segments);
 }
 
 // The same for Io, Europa, Ganymede or Callisto, sampled from astronomy-engine

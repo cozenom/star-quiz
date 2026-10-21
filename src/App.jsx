@@ -8,6 +8,7 @@ import SkyView from './components/SkyView';
 import StudyPage from './components/StudyPage';
 import { generateQuestions, generateSingleQuestion } from './utils/quizHelpers';
 import { attachSmallBodyHistory } from './utils/smallBodies';
+import { setPlanetOrbits } from './utils/planets';
 
 // Split out so three.js is only downloaded when 3D mode opens
 const Universe3D = lazy(() => import('./components/Universe3D'));
@@ -239,6 +240,27 @@ function App() {
             });
     };
 
+    // Planet orbits over 1600-2500 (planet_orbits.json: wave fits to JPL
+    // Horizons + VSOP87). Optional: without it planets.js uses
+    // astronomy-engine, less accurate away from today.
+    const planetOrbitsLoaded = useRef(null);
+    const loadPlanetOrbits = () => {
+        if (planetOrbitsLoaded.current) return planetOrbitsLoaded.current;
+        planetOrbitsLoaded.current = fetch(`${import.meta.env.BASE_URL}data/planet_orbits.json`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Failed to load planet orbits: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => setPlanetOrbits(data))
+            .catch(error => {
+                console.error('Error loading planet orbits:', error);
+                planetOrbitsLoaded.current = null;  // try again next time
+            });
+        return planetOrbitsLoaded.current;
+    };
+
     // Moons of the other planets (orbits from JPL). Optional like planets.json.
     const loadMoons = () => {
         if (moonsData !== null) {
@@ -321,7 +343,7 @@ function App() {
         }
 
         if (target === 'universe3d') {
-            await Promise.all([loadStars3d(), loadPlanetFacts(), loadMoons(), loadSmallBodies()]);
+            await Promise.all([loadStars3d(), loadPlanetFacts(), loadPlanetOrbits(), loadMoons(), loadSmallBodies()]);
         } else if (target === 'skyview') {
             await loadSkyViewStars();
         }

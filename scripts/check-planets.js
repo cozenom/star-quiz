@@ -1,4 +1,4 @@
-// Checks src/utils/planets.js against Skyfield + JPL DE421, and
+// Checks src/utils/planets.js (with public/data/planet_orbits.json),
 // src/utils/moons.js (with public/data/moons.json) and
 // src/utils/smallBodies.js (with public/data/small_bodies*) against JPL
 // Horizons.
@@ -10,22 +10,27 @@
 // Then here:
 //   node scripts/check-planets.js
 //
-// For each date, compares where each body appears from Earth (RA/Dec) and
-// how far it is from the Sun. RA/Dec go through the scene frame, so this
-// also checks that planets line up with the stars (raDecToXYZ).
+// Planets: at dates over 1600-2500, compares where each body appears from
+// Earth (RA/Dec) and how far it is from the Sun, for planet_orbits.json
+// and, for comparison, astronomy-engine alone (what the app falls back
+// to). RA/Dec go through the scene frame, so this also checks that planets
+// line up with the stars (raDecToXYZ).
 
 import { readFileSync } from 'node:fs';
+import { MakeTime } from 'astronomy-engine';
 import { moonPosition } from '../src/utils/moons.js';
-import { geocentricMoon, heliocentricPosition, SOLAR_SYSTEM_BODIES } from '../src/utils/planets.js';
+import { geocentricMoon, heliocentricPosition, setPlanetOrbits, SOLAR_SYSTEM_BODIES } from '../src/utils/planets.js';
 import { attachSmallBodyHistory, historyYears, smallBodyPosition } from '../src/utils/smallBodies.js';
 
 const REF = '../../Star_Data/output/planet_reference.json';  // relative to this file
 const ref = JSON.parse(readFileSync(new URL(REF, import.meta.url)));
+const planetOrbits = JSON.parse(readFileSync(new URL('../public/data/planet_orbits.json', import.meta.url)));
 
 // Scene frame (north = +Y, see raDecToXYZ) -> unit direction in ICRS (north = +Z)
 const sceneToIcrs = ([x, y, z]) => [x, -z, y];
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const norm = (v) => Math.hypot(...v);
+const KM_PER_AU = 149597870.7;
 
 // Angle between two vectors, arcseconds
 function separationArcsec(a, b) {
@@ -33,69 +38,105 @@ function separationArcsec(a, b) {
     return Math.acos(Math.min(1, Math.max(-1, cos))) * 180 / Math.PI * 3600;
 }
 
-// Limit (arcsec on the sky from Earth): astronomy-engine promises ~1'.
-// First run (2026-10-13): worst 20" (Venus near inferior conjunction).
-// For scale, one pixel at the default 60 deg FOV is ~200".
-const LIMIT = { default: 60 };
+// The Date whose TT (astronomy-engine's Delta T, as planets.js uses) is
+// the reference's TDB (TDB - TT < 2 ms)
+function dateAtTdb(jd) {
+    const tt = jd - 2451545;
+    let ut = tt;
+    for (let i = 0; i < 4; i++) ut += tt - MakeTime(ut).tt;
+    return MakeTime(ut).date;
+}
 
-let worst = 0;
+// Limit (arcsec on the sky from Earth) for planet_orbits.json. Expected
+// worst (2026-10-20 build): ~4" (Pluto 76,000 km off at 28 AU; Mars at
+// opposition). Earth's own error (~200 km, VSOP87) is in every planet's.
+// The Moon is astronomy-engine's either way: ~45" (76 km) at worst, at
+// the 1600 and 2500 ends. For scale, one pixel at the default 60 deg FOV
+// is ~200".
+const LIMIT = { default: 5, Moon: 60 };
+
+// Worst over all dates, per body: {sky, km, date} for the model and for
+// astronomy-engine alone
+const worst = {};
+const track = (key, body, sky, km, iso) => {
+    const w = (worst[body] ??= {});
+    if (!w[key] || sky > w[key].sky) w[key] = { sky, km: Math.max(km, w[key]?.km ?? 0), date: iso };
+    else w[key].km = Math.max(km, w[key].km);
+};
+for (const [key, orbits] of [['model', planetOrbits], ['engine', null]]) {
+    setPlanetOrbits(orbits);
+    ref.jd_tdb.forEach((jd, d) => {
+        const date = dateAtTdb(jd);
+        const earth = sceneToIcrs(heliocentricPosition('Earth', date));
+        const refEarth = ref.helio.Earth[d];
+        for (const body of SOLAR_SYSTEM_BODIES) {
+            const mine = sceneToIcrs(heliocentricPosition(body, date));
+            const theirs = ref.helio[body][d];
+            const sky = body === 'Earth'
+                ? separationArcsec(mine, theirs)  // Earth: direction from the Sun
+                : separationArcsec(sub(mine, earth), sub(theirs, refEarth));
+            track(key, body, sky, norm(sub(mine, theirs)) * KM_PER_AU, ref.dates[d]);
+        }
+        const moon = sceneToIcrs(geocentricMoon(date));
+        track(key, 'Moon', separationArcsec(moon, ref.moon[d]), norm(sub(moon, ref.moon[d])) * KM_PER_AU, ref.dates[d]);
+    });
+}
+setPlanetOrbits(planetOrbits);
+
 let failed = false;
-ref.dates.forEach((iso, d) => {
-    const date = new Date(iso);
-    const earth = sceneToIcrs(heliocentricPosition('Earth', date));
-    const refEarth = ref.helio.Earth[d];
-    console.log(`\n${iso}`);
-
-    const rows = [];
-    for (const body of SOLAR_SYSTEM_BODIES) {
-        const mine = sceneToIcrs(heliocentricPosition(body, date));
-        const theirs = ref.helio[body][d];
-        const sky = body === 'Earth'
-            ? separationArcsec(mine, theirs)  // Earth: direction from the Sun
-            : separationArcsec(sub(mine, earth), sub(theirs, refEarth));
-        const distErrKm = Math.abs(norm(mine) - norm(theirs)) * 149597870.7;
-        rows.push([body, sky, distErrKm]);
-    }
-    const moon = sceneToIcrs(geocentricMoon(date));
-    rows.push(['Moon', separationArcsec(moon, ref.moon[d]), Math.abs(norm(moon) - norm(ref.moon[d])) * 149597870.7]);
-
-    for (const [body, sky, distErrKm] of rows) {
-        const limit = LIMIT[body] ?? LIMIT.default;
-        const ok = sky <= limit;
-        if (!ok) failed = true;
-        worst = Math.max(worst, sky);
-        console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${body.padEnd(8)} ${sky.toFixed(2).padStart(7)}"  ` +
-            `dist off ${Math.round(distErrKm).toLocaleString()} km`);
-    }
-});
-
-console.log(`\nWorst: ${worst.toFixed(2)}"`);
+console.log(`Planets vs JPL Horizons, ${ref.jd_tdb.length} dates 1600-2500, worst seen from Earth (limit ${LIMIT.default}", Moon ${LIMIT.Moon}"):`);
+console.log(`  ${''.padEnd(13)}${'planet_orbits.json'.padEnd(38)}astronomy-engine alone`);
+const fmtKm = (km) => `${Math.round(km).toLocaleString()} km`;
+for (const [body, { model, engine }] of Object.entries(worst)) {
+    const limit = LIMIT[body] ?? LIMIT.default;
+    const ok = model.sky <= limit;
+    if (!ok) failed = true;
+    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${body.padEnd(8)}${model.sky.toFixed(2).padStart(7)}"  ${fmtKm(model.km).padStart(12)}  ${model.date.slice(0, 4)}` +
+        `        ${engine.sky.toFixed(2).padStart(7)}"  ${fmtKm(engine.km).padStart(12)}  ${engine.date.slice(0, 4)}`);
+}
+console.log('  (km: worst distance from the true position, Sun-centred)');
 
 // ---------- Moons (utils/moons.js) vs JPL Horizons ----------
-// Reference: Star_Data scripts/tools/moon_reference.py. Moons are fitted
-// at a 2026 epoch, so the 2026 column must be within MOON_LIMIT_DEG; the
-// other years are shown to see the drift (soonest for the distant
-// irregular moons the Sun perturbs). 5 deg because Phobos's orbit turns
-// round every ~1-2 years (Mars's bulge), which a fixed ellipse can't
-// follow: ~3.5 deg (570 km) off in 2026. The rest are within ~1.5 deg.
+// Reference: Star_Data scripts/tools/moon_reference.py, at dates over
+// 1650-2450 where each moon's Horizons solution has them ('-' elsewhere).
+// Wave-fit moons (moons.json `orbit`) must be within MOON_FIT_LIMIT_DEG at
+// every date inside their fitted years; past those (straight-line
+// continuation, see waveOrbits.js) they are shown, not judged. Moons on the
+// fixed 2026 ellipse only must be within MOON_LIMIT_DEG in 2026 (Phobos'
+// orbit turns round every ~1-2 years: ~3.5 deg off in 2026 on one).
+// The "fixed" column is that ellipse's worst at the same dates, for
+// comparison.
+const MOON_FIT_LIMIT_DEG = 0.5;
 const MOON_LIMIT_DEG = 5;
 const moonRef = JSON.parse(readFileSync(new URL('../../Star_Data/output/moon_reference.json', import.meta.url)));
 const moonsData = JSON.parse(readFileSync(new URL('../public/data/moons.json', import.meta.url)));
 const moonByCode = new Map(moonsData.moons.map(m => [String(m.code), m]));
-const jdToDate = (jd) => new Date((jd - 2440587.5) * 86400000);
-const years = moonRef.dates.map(jd => jdToDate(jd).getUTCFullYear());
+const jdToDate = (jd) => new Date((jd - 2440587.5) * 86400000);  // (small bodies below: UTC JDs)
+const moonDates = moonRef.dates.map(dateAtTdb);
+const years = moonDates.map(d => d.getUTCFullYear());
 
-console.log(`\nMoons, angle seen from the planet (limit ${MOON_LIMIT_DEG} deg in 2026):`);
-console.log(`  ${''.padEnd(13)}${years.map(y => String(y).padStart(9)).join('')}`);
+console.log(`\nMoons, angle seen from the planet (wave fits: limit ${MOON_FIT_LIMIT_DEG} deg inside their years; fixed ellipse: ${MOON_LIMIT_DEG} deg in 2026):`);
+console.log(`  ${''.padEnd(13)}${years.map(y => String(y).padStart(7)).join('')}   worst km (fixed ellipse)`);
 for (const [code, refs] of Object.entries(moonRef.moons)) {
     const m = moonByCode.get(code);
     if (!m) continue;
-    const errs = refs.map((ref, d) => separationArcsec(sceneToIcrs(moonPosition(m, jdToDate(moonRef.dates[d]))), ref) / 3600);
-    const now = errs[years.indexOf(2026)];
-    const ok = now <= MOON_LIMIT_DEG;
+    const fixed = { ...m, orbit: undefined };
+    let ok = true, worstKm = 0, worstFixedKm = 0;
+    const cells = refs.map((ref, d) => {
+        if (!ref) return '-'.padStart(7);
+        const mine = sceneToIcrs(moonPosition(m, moonDates[d])).map(v => v * KM_PER_AU);
+        const deg = separationArcsec(mine, ref) / 3600;
+        worstKm = Math.max(worstKm, norm(sub(mine, ref)));
+        worstFixedKm = Math.max(worstFixedKm, norm(sub(sceneToIcrs(moonPosition(fixed, moonDates[d])).map(v => v * KM_PER_AU), ref)));
+        const t = moonRef.dates[d] - 2451545;
+        const inside = m.orbit && t >= m.orbit.lo && t <= m.orbit.hi;
+        if (m.orbit ? inside && deg > MOON_FIT_LIMIT_DEG : years[d] === 2026 && deg > MOON_LIMIT_DEG) ok = false;
+        return `${deg < 10 ? deg.toFixed(2) : deg.toFixed(0)}°${m.orbit && !inside ? '*' : ' '}`.padStart(7);
+    });
     if (!ok) failed = true;
-    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${m.name.padEnd(8)}${errs.map(e => `${e.toFixed(2)}°`.padStart(9)).join('')}`);
+    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${m.name.padEnd(8)}${cells.join('')}   ${fmtKm(worstKm).padStart(10)} (${fmtKm(worstFixedKm)})`);
 }
+console.log('  * past the moon\'s Horizons years (carried on, not judged)');
 
 // ---------- Named small bodies (utils/smallBodies.js) vs JPL Horizons ----------
 // Reference: Star_Data scripts/tools/small_body_reference.py. Each position
