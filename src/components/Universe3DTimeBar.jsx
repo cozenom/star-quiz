@@ -57,11 +57,23 @@ export function formatRate(rate) {
 }
 
 // ---------- Dates ----------
-// Planets are good for centuries; moon orbits are fitted around 2026
-const MOONS_GOOD_YEARS = [2016, 2036];
+// Planets follow JPL Horizons over the whole range (planet_orbits.json);
+// the big moons' Horizons orbits cover at least 1800-2200 (Saturn's from
+// 1750, Uranus' 1600-2400), and are carried on, drifting, outside them
+const MOONS_FITTED_YEARS = [1800, 2200];
 export const TIME_RANGE = [Date.UTC(1600, 0, 1), Date.UTC(2500, 0, 1)];
-// The date scrubber spans this either side of its centre
-const SCRUB_HALF_MS = YEAR_S * 1000;
+// How far the date scrubber reaches either side of its centre (All: the
+// whole range). Its ends label the dates at the span's own resolution.
+const DAY_MS = 86400000;
+const SCRUB_SPANS = [
+    { id: 'day', label: 'Day', half: DAY_MS, ends: { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } },
+    { id: 'month', label: 'Month', half: 30.44 * DAY_MS, ends: { month: 'short', day: 'numeric', year: 'numeric' } },
+    { id: 'year', label: 'Year', half: YEAR_S * 1000, ends: { month: 'short', year: 'numeric' } },
+    { id: 'decade', label: 'Decade', half: 10 * YEAR_S * 1000, ends: { year: 'numeric' } },
+    { id: 'century', label: 'Century', half: 100 * YEAR_S * 1000, ends: { year: 'numeric' } },
+    { id: 'all', label: 'All', half: null, ends: { year: 'numeric' } },
+];
+const SCRUB_STEPS = 10000;
 
 const pad = (n) => String(n).padStart(2, '0');
 // Local time as a datetime-local input value ("2026-10-14T21:45")
@@ -69,18 +81,32 @@ const toInputValue = (ms) => {
     const d = new Date(ms);
     return `${String(d.getFullYear()).padStart(4, '0')}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
-const shortDate = (ms) => new Date(ms).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+const clampTime = (ms) => Math.min(TIME_RANGE[1], Math.max(TIME_RANGE[0], ms));
+
+// The scrubber's window [start, end] for a span around its centre, kept
+// inside TIME_RANGE (shifted, not cut, near the ends)
+function scrubWindow(span, anchor) {
+    if (!span.half) return TIME_RANGE;
+    const half = Math.min(span.half, (TIME_RANGE[1] - TIME_RANGE[0]) / 2);
+    const start = Math.min(TIME_RANGE[1] - 2 * half, Math.max(TIME_RANGE[0], anchor - half));
+    return [start, start + 2 * half];
+}
 
 function Universe3DTimeBar({ time, rate, playing, onTogglePlay, onSetRate, onStep, onNow, onSetTime }) {
     const inputRef = useRef(null);
 
-    // Date scrubber window: centred on `anchor`, re-centred whenever the
-    // time leaves it (running time, a jump) unless the user is dragging it
+    // Date scrubber window: the chosen span centred on `anchor`, re-centred
+    // whenever the time leaves it (running time, a jump) unless the user is
+    // dragging it, and on a new span
+    const [spanId, setSpanId] = useState('year');
+    const span = SCRUB_SPANS.find(sp => sp.id === spanId);
     const [anchor, setAnchor] = useState(time);
+    const [start, end] = scrubWindow(span, anchor);
     const scrubbing = useRef(false);
     useEffect(() => {
-        if (!scrubbing.current && Math.abs(time - anchor) > SCRUB_HALF_MS) setAnchor(time);
-    }, [time, anchor]);
+        if (!scrubbing.current && (time < start || time > end)) setAnchor(time);
+    }, [time, start, end]);
+    const endLabel = (ms) => new Date(ms).toLocaleString(undefined, span.ends);
 
     const date = new Date(time);
     const showSeconds = playing && Math.abs(rate) <= 60;
@@ -89,7 +115,7 @@ function Universe3DTimeBar({ time, rate, playing, onTogglePlay, onSetRate, onSte
         hour: '2-digit', minute: '2-digit', ...(showSeconds ? { second: '2-digit' } : {}),
     });
     const year = date.getFullYear();
-    const moonsApprox = year < MOONS_GOOD_YEARS[0] || year > MOONS_GOOD_YEARS[1];
+    const moonsApprox = year < MOONS_FITTED_YEARS[0] || year > MOONS_FITTED_YEARS[1];
     const isNow = playing && rate === 1 && Math.abs(time - Date.now()) < 60000;
     const speedText = !playing ? 'Paused' : `${rate < 0 ? '◀ ' : ''}${formatRate(rate)}`;
 
@@ -151,29 +177,42 @@ function Universe3DTimeBar({ time, rate, playing, onTogglePlay, onSetRate, onSte
                 />
             </div>
 
-            {/* Date: scrub through a year either side */}
+            {/* Date: scrub through the chosen span (All: 1600-2500) */}
             <div className="universe-3d-time-slider universe-3d-time-scrub">
+                <div className="universe-3d-time-spans" role="group" aria-label="Scrubber reach">
+                    {SCRUB_SPANS.map(sp => (
+                        <button
+                            key={sp.id}
+                            className={sp.id === spanId ? 'active' : ''}
+                            aria-pressed={sp.id === spanId}
+                            onClick={() => { setSpanId(sp.id); setAnchor(time); }}
+                            title={sp.half ? `Scrub a ${sp.label.toLowerCase()} either side` : 'Scrub the whole of 1600-2500'}
+                        >
+                            {sp.label}
+                        </button>
+                    ))}
+                </div>
                 <input
                     type="range"
-                    min={-1000}
-                    max={1000}
+                    min={0}
+                    max={SCRUB_STEPS}
                     step={1}
-                    value={Math.round((time - anchor) / SCRUB_HALF_MS * 1000)}
+                    value={Math.round((time - start) / (end - start) * SCRUB_STEPS)}
                     onPointerDown={() => { scrubbing.current = true; }}
                     onPointerUp={() => { scrubbing.current = false; }}
-                    onChange={(e) => onSetTime(anchor + Number(e.target.value) / 1000 * SCRUB_HALF_MS)}
+                    onChange={(e) => onSetTime(clampTime(start + Number(e.target.value) / SCRUB_STEPS * (end - start)))}
                     aria-label="Date"
-                    title="Drag to move through the year either side"
+                    title="Drag to move through time"
                 />
                 <div className="universe-3d-time-scrub-ends" aria-hidden="true">
-                    <span>{shortDate(anchor - SCRUB_HALF_MS)}</span>
-                    <span>{shortDate(anchor + SCRUB_HALF_MS)}</span>
+                    <span>{endLabel(start)}</span>
+                    <span>{endLabel(end)}</span>
                 </div>
             </div>
 
             {moonsApprox && (
                 <div className="universe-3d-time-note">
-                    Moon positions are approximate this far from 2026
+                    Some moons extrapolated (past JPL's orbits)
                 </div>
             )}
         </div>

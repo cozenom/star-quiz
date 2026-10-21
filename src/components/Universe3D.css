@@ -316,7 +316,33 @@
     justify-content: space-between;
 }
 
+/* How far the scrubber reaches: Day ... All */
+.universe-3d-time-spans {
+    display: flex;
+    gap: 0.2rem;
+    margin-bottom: 0.15rem;
+}
+
+.universe-3d-time .universe-3d-time-spans button {
+    flex: 1;
+    min-height: 1.4rem;
+    min-width: 0;
+    padding: 0.05rem 0.3rem;
+    font-size: 0.7rem;
+    color: #94a3b8;
+    background: rgba(51, 65, 85, 0.45);
+}
+
+.universe-3d-time .universe-3d-time-spans button.active {
+    color: #0f172a;
+    background: #facc15;
+}
+
+/* Wraps to the clock's width instead of widening it (the panel sizes to
+   its controls; the note comes and goes with the date) */
 .universe-3d-time-note {
+    width: 0;
+    min-width: 100%;
     font-size: 0.75rem;
     color: #fbbf24;
 }
