@@ -16,11 +16,11 @@
 // to). RA/Dec go through the scene frame, so this also checks that planets
 // line up with the stars (raDecToXYZ).
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { MakeTime } from 'astronomy-engine';
-import { moonPosition } from '../src/utils/moons.js';
+import { moonPosition, setMoonSystems } from '../src/utils/moons.js';
 import { geocentricMoon, heliocentricPosition, setPlanetOrbits, SOLAR_SYSTEM_BODIES } from '../src/utils/planets.js';
-import { attachSmallBodyHistory, historyYears, smallBodyPosition } from '../src/utils/smallBodies.js';
+import { attachSmallBodyHistory, attachSmallBodyOrbits, historyYears, smallBodyPosition } from '../src/utils/smallBodies.js';
 
 const REF = '../../Star_Data/output/planet_reference.json';  // relative to this file
 const ref = JSON.parse(readFileSync(new URL(REF, import.meta.url)));
@@ -111,6 +111,7 @@ const MOON_LIMIT_DEG = 5;
 const moonRef = JSON.parse(readFileSync(new URL('../../Star_Data/output/moon_reference.json', import.meta.url)));
 const moonsData = JSON.parse(readFileSync(new URL('../public/data/moons.json', import.meta.url)));
 const moonByCode = new Map(moonsData.moons.map(m => [String(m.code), m]));
+setMoonSystems(moonsData);  // as the app: Pluto off the Pluto-Charon barycentre, Nix & co. from it
 const jdToDate = (jd) => new Date((jd - 2440587.5) * 86400000);  // (small bodies below: UTC JDs)
 const moonDates = moonRef.dates.map(dateAtTdb);
 const years = moonDates.map(d => d.getUTCFullYear());
@@ -148,9 +149,11 @@ console.log('  * past the moon\'s Horizons years (carried on, not judged)');
 const SMALL_BODY_LIMIT_DEG = 0.05;
 const sbRef = JSON.parse(readFileSync(new URL('../../Star_Data/output/small_body_reference.json', import.meta.url)));
 const sbMeta = JSON.parse(readFileSync(new URL('../public/data/small_bodies.json', import.meta.url)));
-const sbPlain = JSON.parse(JSON.stringify(sbMeta.named));  // without history
+const sbPlain = JSON.parse(JSON.stringify(sbMeta.named)).map(({ orbit, ...b }) => b);  // without history or wave fit: the 2026 SBDB orbit alone
 const historyFile = readFileSync(new URL('../public/data/small_bodies_history.bin', import.meta.url));
 attachSmallBodyHistory(sbMeta, historyFile.buffer.slice(historyFile.byteOffset, historyFile.byteOffset + historyFile.length));
+const sbOrbits = new URL('../public/data/small_body_orbits.json', import.meta.url);  // optional, as in the app
+if (existsSync(sbOrbits)) attachSmallBodyOrbits(sbMeta, JSON.parse(readFileSync(sbOrbits)));
 const sbYears = sbRef.dates.map(jd => jdToDate(jd).getUTCFullYear());
 const curated = JSON.parse(readFileSync(new URL('../../Star_Data/curated/small_bodies.json', import.meta.url))).bodies;
 const KM_PER_AU_ = 149597870.7;

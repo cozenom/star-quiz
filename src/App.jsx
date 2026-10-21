@@ -7,8 +7,9 @@ import QuizResults from './components/QuizResults';
 import SkyView from './components/SkyView';
 import StudyPage from './components/StudyPage';
 import { generateQuestions, generateSingleQuestion } from './utils/quizHelpers';
-import { attachSmallBodyHistory } from './utils/smallBodies';
+import { attachSmallBodyHistory, attachSmallBodyOrbits } from './utils/smallBodies';
 import { setPlanetOrbits } from './utils/planets';
+import { setMoonSystems } from './utils/moons';
 
 // Split out so three.js is only downloaded when 3D mode opens
 const Universe3D = lazy(() => import('./components/Universe3D'));
@@ -275,6 +276,7 @@ function App() {
                 return response.json();
             })
             .then(data => {
+                setMoonSystems(data);  // Pluto off the Pluto-Charon barycentre
                 setMoonsData(data);
                 return data;
             })
@@ -308,13 +310,23 @@ function App() {
                 console.error('Error loading small body history:', error);
                 return null;
             });
+        // Wave fits for some of them (Ceres etc.: closer than the history's
+        // blends); optional too
+        const orbits = fetchOk('small_body_orbits.json')
+            .then(response => response.json())
+            .catch(error => {
+                console.error('Error loading small body orbits:', error);
+                return null;
+            });
         return Promise.all([
             fetchOk('small_bodies.json').then(response => response.json()),
             fetchOk('small_bodies.bin').then(response => response.arrayBuffer()),
             history,
+            orbits,
         ])
-            .then(([meta, buffer, historyBuffer]) => {
+            .then(([meta, buffer, historyBuffer, orbitData]) => {
                 if (historyBuffer) attachSmallBodyHistory(meta, historyBuffer);
+                if (orbitData) attachSmallBodyOrbits(meta, orbitData);
                 // Rows of 6 uint16 elements, then one part byte per point
                 const count = meta.tiers[0].count;
                 const data = { meta, points: new Uint16Array(buffer, 0, count * 6), parts: new Uint8Array(buffer, count * 12, count) };

@@ -134,6 +134,7 @@ function SmallBodyInfoCard({ body, distances, time, onClose, onFlyTo }) {
             <p className="star-info-muted star-info-origin">
                 {years
                     ? `Orbit from JPL Horizons, which includes the planets' pull, ${years[0]}-${years[1]}`
+                        + (b.orbit?.check ? ` (within ~${Number(b.orbit.check.worst_km.toPrecision(2)).toLocaleString()} km)` : '')
                         + (years[0] > 1600 || years[1] < 2499 ? ': only approximate outside those years.' : '.')
                     : 'Position from its orbit around the Sun alone (JPL Small-Body Database): close for years around now, drifting over decades as the planets tug it.'}
             </p>

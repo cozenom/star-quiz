@@ -29,6 +29,21 @@ function formatDays(d) {
     return `${fmt(d / 365.25)} years`;
 }
 
+// A moon's position source (moons.js moonPositionSource) in words
+const within = (km) => (km != null ? ` (within ~${fmt(km, 2)} km)` : '');
+function positionText(p) {
+    if (p.kind === 'fit') {
+        return `Position from JPL Horizons' orbit for ${p.years[0]}-${p.years[1]}${within(p.worstKm)}; `
+            + 'carried on outside those years, less exactly.';
+    }
+    if (p.kind === 'fit+engine') {
+        return `Position from JPL Horizons' orbit for ${p.years[0]}-${p.years[1]}${within(p.worstKm)}; `
+            + 'outside those years from astronomy-engine (within ~2,000 km).';
+    }
+    if (p.kind === 'engine') return 'Position from astronomy-engine (within ~1,000 km).';
+    return 'Position from one orbit fitted for 2026: approximate away from that year.';
+}
+
 const formatDate = (date) => date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 
 // time: the clock (ms), for our Moon's phase
@@ -164,11 +179,8 @@ function PlanetInfoCard({ body, distances, time, onClose, onFlyTo }) {
                 )}
             </dl>
 
-            {f.approximate && (
-                <p className="star-info-muted star-info-origin">
-                    Small and far from {f.parent}, so the Sun keeps tugging its orbit around:
-                    its position here is approximate.
-                </p>
+            {f.position && (
+                <p className="star-info-muted star-info-origin">{positionText(f.position)}</p>
             )}
 
             <button className="button-primary star-info-fly" onClick={onFlyTo}>

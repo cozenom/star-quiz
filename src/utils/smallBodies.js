@@ -11,9 +11,17 @@
 // range), the single SBDB element set (2026) is propagated alone: the Sun's
 // pull only, drifting as the planets tug the body. The point cloud uses
 // that simple form on the GPU (smallBodies3d.js).
+//
+// Bodies with an `orbit` (small_body_orbits.json, attachSmallBodyOrbits: a
+// wave fit to Horizons on an even grid, utils/waveOrbits.js, kept by the
+// build only where it beats the blend: Ceres ~350,000 km -> ~8,000) follow
+// that instead.
 
 import { MakeTime } from 'astronomy-engine';
 import { eccentricAnomaly } from './moons.js';
+import { wavesPosition } from './waveOrbits.js';
+
+const KM_PER_AU = 149597870.7;
 
 const DEG = Math.PI / 180;
 const DAY_MS = 86400000;
@@ -47,6 +55,14 @@ export const semiMajorAxis = (el) => el.q / (1 - el.e);
 export function smallBodyPeriodDays(el) {
     if (!isBound(el)) return null;
     return 2 * Math.PI * semiMajorAxis(el) ** 1.5 / GAUSS_K;
+}
+
+// Give the named bodies their wave fits (small_body_orbits.json: {orbits:
+// {id: orbit}}), as `orbit`
+export function attachSmallBodyOrbits(meta, data) {
+    for (const b of meta.named) {
+        if (data?.orbits?.[b.id]) b.orbit = data.orbits[b.id];
+    }
 }
 
 // Give each named body its Horizons samples. meta: small_bodies.json;
@@ -169,6 +185,10 @@ function conicPosition(el, jd) {
 // (see the top of the file)
 export function smallBodyPosition(b, date) {
     const jd = julianTT(date);
+    if (b.orbit) {
+        const [x, y, z] = wavesPosition(b.orbit, jd - 2451545);  // ICRF km
+        return [x / KM_PER_AU, z / KM_PER_AU, -y / KM_PER_AU];   // scene frame (north = +Y)
+    }
     const h = b.history;
     if (!h) return conicPosition(b, jd);
     const k = sampleBefore(h, jd);

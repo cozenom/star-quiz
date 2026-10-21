@@ -15,7 +15,7 @@
 // scripts/check-planets.js.
 
 import { Body, GeoMoon, HelioVector, Illumination, MakeTime, MoonPhase, RotationAxis, SearchMoonPhase, SearchMoonQuarter } from 'astronomy-engine';
-import { keplerFromState, wavesPosition } from './waveOrbits.js';
+import { keplerFromState, seriesValue, wavesPosition } from './waveOrbits.js';
 import { KM_PER_AU } from './universe3d.js';
 
 // Drawn in the solar-system layer, in this order
@@ -47,7 +47,9 @@ const OBLIQUITY = 23.4392803055556 * Math.PI / 180;
 const COS_EPS = Math.cos(OBLIQUITY), SIN_EPS = Math.sin(OBLIQUITY);
 
 // vsop87 body -> [x, y, z] km, ICRF (VSOP87A: AU, J2000 ecliptic,
-// T = Julian millennia from J2000)
+// T = Julian millennia from J2000), plus its fitted correction (VSOP87's
+// error against Horizons per axis, km: Earth 206 -> ~30 km, Jupiter
+// 4,100 -> ~600, Saturn 10,700 -> ~1,100)
 function vsopPosition(body, t) {
     const T = t / 365250;
     const out = [0, 0, 0];
@@ -59,7 +61,14 @@ function vsopPosition(body, t) {
         }
     });
     const [x, y, z] = out;
-    return [x * KM_PER_AU, (y * COS_EPS - z * SIN_EPS) * KM_PER_AU, (y * SIN_EPS + z * COS_EPS) * KM_PER_AU];
+    const p = [x * KM_PER_AU, (y * COS_EPS - z * SIN_EPS) * KM_PER_AU, (y * SIN_EPS + z * COS_EPS) * KM_PER_AU];
+    const c = body.correction;
+    if (c) {
+        p[0] += seriesValue(c.x, t, c);
+        p[1] += seriesValue(c.y, t, c);
+        p[2] += seriesValue(c.z, t, c);
+    }
+    return p;
 }
 
 // planet_orbits.json position (AU, scene frame), or null outside its years
@@ -75,6 +84,15 @@ function modelPosition(body, date) {
     return toScene({ x: x / KM_PER_AU, y: y / KM_PER_AU, z: z / KM_PER_AU });
 }
 
+// A planet's offset from its system's barycentre, date -> [x, y, z] AU
+// (setMoonSystems in moons.js): the models give barycentres, and Pluto
+// circles the Pluto-Charon one ~2,100 km out (Charon is 11% of the mass)
+const barycentreOffsets = {};
+export function setBarycentreOffset(body, offset) {
+    if (offset) barycentreOffsets[body] = offset;
+    else delete barycentreOffsets[body];
+}
+
 // One body's position (AU from the Sun) at a Date. Body names as in
 // SOLAR_SYSTEM_BODIES, plus 'Moon' (Earth + astronomy-engine's geocentric
 // Moon, so it stays on Earth whichever Earth is used).
@@ -84,7 +102,9 @@ export function heliocentricPosition(body, date) {
         const moon = geocentricMoon(date);
         return [earth[0] + moon[0], earth[1] + moon[1], earth[2] + moon[2]];
     }
-    return modelPosition(body, date) ?? toScene(HelioVector(Body[body], date));
+    const p = modelPosition(body, date) ?? toScene(HelioVector(Body[body], date));
+    const offset = barycentreOffsets[body]?.(date);
+    return offset ? [p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]] : p;
 }
 
 // A body's spin axis and prime meridian at a Date (IAU WGCCRE 2015), as

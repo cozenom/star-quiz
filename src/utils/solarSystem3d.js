@@ -29,7 +29,7 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { GALILEAN, galileanOrbitLoop, galileanPositions, moonOrbitLoop, moonPeriodDays, moonPosition } from './moons.js';
+import { moonMeanAnomaly, moonMeanOrbit, moonOrbitLoop, moonPeriodDays, moonPosition, moonPositionSource } from './moons.js';
 import { RING_SYSTEMS } from './rings.js';
 import { bodyAxes, heliocentricPosition, moonOrbitPath, orbitPath, orbitPeriodDays, SOLAR_SYSTEM_BODIES } from './planets.js';
 import { smallBodyOrbit, smallBodyPeriodDays, smallBodyPosition, spinAxes } from './smallBodies.js';
@@ -547,9 +547,9 @@ function moonFacts(m) {
         type: 'moon',
         parent: m.planet,
         diameter_km: m.radius_km ? m.radius_km * 2 : null,
-        orbit_days: 360 / Math.abs(m.n),
-        orbit_radius_km: m.a_km,
-        approximate: !m.major,
+        orbit_days: moonPeriodDays(m),
+        orbit_radius_km: moonMeanOrbit(m).aKm,
+        position: moonPositionSource(m),
     };
 }
 
@@ -842,7 +842,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         entry.cloud = track(makeMinorMoonCloud(entry.moons.length, pixelRatio));
         scene.add(entry.cloud);
         // Typical orbit size (median), for the zoom fade
-        const radii = entry.moons.map(b => b.moon.a_km / KM_PER_AU).sort((x, y) => x - y);
+        const radii = entry.moons.map(b => moonMeanOrbit(b.moon).aKm / KM_PER_AU).sort((x, y) => x - y);
         entry.spreadAu = radii[Math.floor(radii.length / 2)];
         entry.fade = 0;
     }
@@ -890,7 +890,6 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
     // from the straight segments (Pluto: ~8,000 km, seven of its radii), so
     // each frame the body's own position is put into the line between the
     // two samples around it (bodyAt): the line always passes through it.
-    const isGalilean = (body) => body.parentId === 'Jupiter' && GALILEAN.includes(body.name);
     const orbits = [];  // {line, sample(date), periodDays, sampledAt (ms) | null, ...}
     const moonOrbitGroups = new Map();  // planet id -> Group
     const moonOrbitGroup = (planetId) => {
@@ -971,9 +970,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
     const relative = new THREE.Vector3();
     const fromParent = (body) => () => relative.subVectors(body.position, byId.get(body.parentId).position);
     const moonOrbit = (body, opacity) => addOrbit({
-        sample: isGalilean(body)
-            ? (d) => galileanOrbitLoop(body.name, moonPeriodDays(body.moon), d)
-            : (d) => moonOrbitLoop(body.moon, d),
+        sample: (d) => moonOrbitLoop(body.moon, d),
         periodDays: moonPeriodDays(body.moon), color: body.color, opacity,
         parent: moonOrbitGroup(body.parentId), segments: 256, bodyAt: fromParent(body),
     });
@@ -1144,8 +1141,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
                 // F ring), then rides along with the F ring, which falls
                 // spacingDeg behind the moon each of its orbits
                 const m = moon.moon;
-                const jd = date.getTime() / 86400000 + 2440587.5;
-                const sinceApoDays = ((((m.M + m.n * (jd - m.epoch_jd) - 180) % 360) + 360) % 360) / m.n;
+                const sinceApoDays = (((moonMeanAnomaly(m, date) - 180) % 360) + 360) % 360 / m.n;
                 const atApo = moonPosition(m, new Date(date.getTime() - sinceApoDays * 86400000));
                 const ringRate = m.n * (1 - ch.spacingDeg / 360);  // F ring, deg/day
                 u.uChannels.value.z = ringAngle(r, ringLocal.set(atApo[0], atApo[1], atApo[2]))
@@ -1179,10 +1175,9 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
             zAxis.crossVectors(xAxis, yAxis);
             body.mesh.quaternion.setFromRotationMatrix(basis.makeBasis(xAxis, yAxis, zAxis));
         }
-        const galilean = moonBodies.some(isGalilean) ? galileanPositions(date) : null;
         for (const body of moonBodies) {
             const parent = byId.get(body.parentId).position;
-            const rel = isGalilean(body) ? galilean[body.name] : moonPosition(body.moon, date);
+            const rel = moonPosition(body.moon, date);
             body.position.set(rel[0], rel[1], rel[2]).add(parent);
             if (body.dot) body.dot.material.uniforms.uParentOffset.value.set(-rel[0], -rel[1], -rel[2]);
         }
@@ -1191,10 +1186,9 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         // side (so the Uranus moons and Triton spin backwards about it);
         // a dwarf planet's moons, like Charon, keep the right-hand pole
         const later = new Date(date.getTime() + LOCK_STEP_MS);
-        const galileanLater = galilean && galileanPositions(later);
         for (const body of lockedMoons) {
             fromPlanet.subVectors(body.position, byId.get(body.parentId).position);
-            const next = isGalilean(body) ? galileanLater[body.name] : moonPosition(body.moon, later);
+            const next = moonPosition(body.moon, later);
             step.set(next[0], next[1], next[2]).sub(fromPlanet);
             yAxis.crossVectors(fromPlanet, step).normalize();
             if (body.parentId !== 'Pluto' && yAxis.dot(ECLIPTIC_NORTH) < 0) yAxis.negate();

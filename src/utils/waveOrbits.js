@@ -27,7 +27,8 @@ function solveKepler(M, e) {
     return E;
 }
 
-function seriesValue(s, t, body) {
+// One series at t (days from J2000); body gives mid, half and optional lo, hi
+export function seriesValue(s, t, body) {
     const { mid, half, lo, hi } = body;
     const p = s.poly;
     const x = (t - mid) / half;
