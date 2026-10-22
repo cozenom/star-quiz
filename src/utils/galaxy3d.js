@@ -82,6 +82,11 @@ export const MASER_COLOR = 0x5eead4;
 const MASER_SIZE_PX = 8;
 const MASER_RANGE_OPACITY = 0.35;
 const MASER_DIMMED = 0.25;
+// Real, so shown before the model is (camera distance from the Sun, ly)
+const MASER_FADE_IN_LY = [1000, 3000];  // (built at BUILD_LY)
+// Flying to one: this far from it, or this share of its distance if more
+const MASER_VIEW_MIN_LY = 4000;
+const MASER_VIEW_SHARE = 0.4;
 
 const starVertexShader = `
     attribute vec3 color;
@@ -428,6 +433,48 @@ export function galaxyPose(data, id) {
 // Cards a maser can belong to, in the order of its `group` attribute
 const CARD_IDS = ['centre', ...Object.keys(ARM_LABELS)];
 
+// Maser i of galaxy.json `masers`, for its card, tooltip and search:
+// {index, name (what it's called), gname (its G-number), alias, note,
+//  card, armName, position (ly array), distance, errorPct, range [near, far]
+//  (ly), plx [mas, err], rGc (ly), constellation, motion (see
+//  build_galaxy.py), refs (citations), label (one line)}
+export function maserInfo(m, i) {
+    const name = m.title[i] || m.alias[i] || m.name[i];
+    const armName = m.card[i] === 'centre' ? 'Galactic Centre' : ARM_LABELS[m.card[i]] ?? m.arm[i] ?? 'arm unclear';
+    return {
+        index: i,
+        name,
+        gname: m.name[i],
+        alias: m.alias[i],
+        note: m.note[i],
+        card: m.card[i],
+        armName,
+        position: m.xyz_ly.slice(3 * i, 3 * i + 3),
+        distance: m.distance_ly[i],
+        errorPct: m.error_pct[i],
+        range: m.range_ly[i],
+        plx: m.plx[i],
+        rGc: m.r_gc_ly[i],
+        constellation: m.constellation[i],
+        motion: m.motion[i],
+        refs: m.refs[i].map(r => m.ref_list[r]),
+        label: `${name}${name !== m.name[i] ? ` (${m.name[i]})` : ''} · maser, ${m.distance_ly[i].toLocaleString()} ly`
+            + ` ± ${m.error_pct[i]}% · ${armName}`,
+    };
+}
+
+// Camera view of maser i: looking at it from above the disc, on the Sun's
+// side, far enough out to see its neighbourhood. {position, target, minDistance}
+export function maserPose(data, i) {
+    const m = data.to_scene.matrix;
+    const pole = new THREE.Vector3(m[0][2], m[1][2], m[2][2]).normalize();
+    const target = new THREE.Vector3().fromArray(data.masers.xyz_ly, 3 * i);
+    const toSun = target.clone().negate().projectOnPlane(pole).normalize();
+    const distance = Math.max(MASER_VIEW_MIN_LY, target.length() * MASER_VIEW_SHARE);
+    const dir = pole.clone().multiplyScalar(0.6).addScaledVector(toSun, 0.8).normalize();
+    return { position: target.clone().addScaledVector(dir, distance).toArray(), target: target.toArray(), minDistance: 10 };
+}
+
 // The measured masers: rings + distance ranges, in the scene frame (ly).
 // Returns {objects, geometries, materials, info: maser(i), pick, setHighlight}
 function buildMasers(m, pixelRatio) {
@@ -478,7 +525,6 @@ function buildMasers(m, pixelRatio) {
     lines.renderOrder = -1;
     lines.frustumCulled = false;
 
-    const armName = (i) => (m.card[i] === 'centre' ? 'Galactic Centre' : ARM_LABELS[m.card[i]] ?? m.arm[i]);
     const projected = new THREE.Vector3();
     return {
         objects: [lines, rings],
@@ -490,18 +536,7 @@ function buildMasers(m, pixelRatio) {
         },
         // id: a card ('centre' or an arm name) whose masers stay bright, or null
         setHighlight: (id) => { highlight.value = id ? CARD_IDS.indexOf(id) : -1; },
-        // {name, card, position (ly array), label}: "W51 Main · 17,600 ly ± 5% · Sagittarius–Carina Arm"
-        info: (i) => {
-            const name = m.alias[i] || m.name[i];
-            const err = m.error_pct[i];
-            return {
-                name,
-                card: m.card[i],
-                position: m.xyz_ly.slice(3 * i, 3 * i + 3),
-                label: `${name}${m.alias[i] ? ` (${m.name[i]})` : ''} · maser, ${m.distance_ly[i].toLocaleString()} ly`
-                    + ` ± ${err}% · ${armName(i)}`,
-            };
-        },
+        info: (i) => maserInfo(m, i),
         // Index of the maser drawn nearest (x, y) px within radiusPx, or null
         pick: (camera, width, height, x, y, radiusPx) => {
             let best = null;
@@ -525,7 +560,8 @@ function buildMasers(m, pixelRatio) {
 // fade(), labels() [{id, name, position (ly)}], setVisible(on),
 // setMasersVisible(on), highlightMasers(cardId or null),
 // pickMaser(camera, width, height, x, y, radiusPx) -> index | null,
-// maser(index) -> {name, card, position, label}, dispose()
+// maser(index) -> maserInfo, maserFade() (0..1: they fade in sooner than
+// the model), dispose()
 export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
     const group = new THREE.Group();
     group.matrixAutoUpdate = false;
@@ -601,7 +637,8 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
         }
         state = 'ready';
     };
-    const masersShown = () => masers !== null && wanted && masersWanted && fade > 0;
+    let maserFade = 0;
+    const masersShown = () => masers !== null && wanted && masersWanted && maserFade > 0;
 
     return {
         update: (cameraPosition, viewportHeightPx, fovDeg) => {
@@ -618,8 +655,9 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             starMaterial.uniforms.uFade.value = fade;
             dustMaterial.uniforms.uFade.value = fade;
             dustMaterial.uniforms.uFocalPx.value = viewportHeightPx * pixelRatio / (2 * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
+            maserFade = state === 'ready' ? smoothstep(ly, ...MASER_FADE_IN_LY) : 0;
             maserGroup.visible = masersShown();
-            masers?.setFade(fade);
+            masers?.setFade(maserFade);
         },
         // How visible it is now (0..1), for its labels
         fade: () => (wanted ? fade : 0),
@@ -632,9 +670,10 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
         },
         // Picked only once they're clearly visible
         pickMaser: (camera, width, height, x, y, radiusPx) => (
-            masersShown() && fade > 0.3 ? masers.pick(camera, width, height, x, y, radiusPx) : null
+            masersShown() && maserFade > 0.3 ? masers.pick(camera, width, height, x, y, radiusPx) : null
         ),
-        maser: (i) => masers.info(i),
+        maser: (i) => (masers ? masers.info(i) : null),
+        maserFade: () => (masersShown() ? maserFade : 0),
         dispose: () => {
             scene.remove(group, maserGroup);
             geometries.forEach(g => g.dispose());

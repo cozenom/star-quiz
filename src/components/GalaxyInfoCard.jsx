@@ -38,13 +38,15 @@ const LEGEND = [
     { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
 ];
-export function GalaxyLegend({ showMasers, onOpen }) {
+// showModel: the model is on screen; showMasers: its masers are (they
+// fade in before the model does)
+export function GalaxyLegend({ showModel, showMasers, onOpen }) {
     return (
         <MapLegend
             title="Milky Way (model)"
             onTitle={onOpen}
             storageKey="universe3d.legend.galaxy"
-            items={LEGEND.filter(k => showMasers || !k.maser).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
+            items={LEGEND.filter(k => (k.maser ? showMasers : showModel)).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
         />
     );
 }
@@ -65,20 +67,23 @@ function Facts({ rows }) {
     );
 }
 
-// Well-known masers on an arm (or at the centre), with their distance
-function Objects({ objects }) {
+// Well-known masers on an arm (or at the centre), with their distance;
+// each opens its own card (onSelectMaser(index))
+function Objects({ objects, onSelectMaser }) {
     if (!objects?.length) return null;
     return (
         <div className="region-part">
             <div className="region-part-head static"><strong>Well-known masers here</strong></div>
             <ul className="region-members">
                 {objects.map(o => (
-                    <li key={o.name} className="galaxy-object">
-                        <div className="galaxy-object-head">
-                            <span>{o.name}</span>
-                            <span className="star-info-muted">{fmt(o.distance)} ly · {o.constellation}</span>
-                        </div>
-                        <div className="star-info-muted">{o.note}</div>
+                    <li key={o.name}>
+                        <button className="region-member galaxy-object" onClick={() => onSelectMaser(o.maser)}>
+                            <div className="galaxy-object-head">
+                                <span>{o.name}</span>
+                                <span className="star-info-muted">{fmt(o.distance)} ly · {o.constellation} ›</span>
+                            </div>
+                            <div className="star-info-muted">{o.note}</div>
+                        </button>
                     </li>
                 ))}
             </ul>
@@ -154,7 +159,7 @@ function MilkyWay({ card }) {
     );
 }
 
-function Centre({ card, bar }) {
+function Centre({ card, bar, onSelectMaser }) {
     return (
         <>
             <h3 className="star-info-title">Galactic Centre</h3>
@@ -167,13 +172,13 @@ function Centre({ card, bar }) {
                 ['Bar', `${fmt(bar.bar_half_length * 2)} ly long, around it`],
                 ...card.facts.map(f => [f.label, f.value]),
             ]} />
-            <Objects objects={card.objects} />
+            <Objects objects={card.objects} onSelectMaser={onSelectMaser} />
             <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
         </>
     );
 }
 
-function Arm({ id, card, maserShort }) {
+function Arm({ id, card, maserShort, onSelectMaser }) {
     // The Sun is inside an arm when it is within the arm's width of its middle
     const inside = card.nearest < card.width / 2;
     // Per measured segment (Norma and Outer for the Norma–Outer arm), the
@@ -197,7 +202,7 @@ function Arm({ id, card, maserShort }) {
                     <div className="star-info-muted">{maserShort}</div></>],
                 ['In the sky', <>{listing(card.constellations)} <span className="star-info-muted">· where it lies within ~20,000 ly</span></>],
             ]} />
-            <Objects objects={card.objects} />
+            <Objects objects={card.objects} onSelectMaser={onSelectMaser} />
             <Sources refs={[card.ref, 'Reid et al. 2019, ApJ 885, 131 (Tables 1 and 2, arm tracks and widths)']} />
             <p className="star-info-muted">The dots are scattered to match the measured arm, not real stars; the rings are the real masers.</p>
         </>
@@ -205,19 +210,96 @@ function Arm({ id, card, maserShort }) {
 }
 
 // id: 'milky_way', 'centre' or an arm name; cards: galaxy.json cards;
-// onSelect(id) opens another card; onView flies the camera to this one
-function GalaxyInfoCard({ id, cards, onSelect, onView, onClose }) {
+// onSelect(id) opens another card, onSelectMaser(index) a maser's;
+// onView flies the camera to this one
+function GalaxyInfoCard({ id, cards, onSelect, onSelectMaser, onView, onClose }) {
     const arm = cards.arms[id];
     return (
         <div className="star-info region-info">
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             {id === 'milky_way' && <MilkyWay card={cards.milky_way} />}
-            {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} />}
-            {arm && <Arm id={id} card={arm} maserShort={cards.milky_way.maser_short} />}
+            {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} onSelectMaser={onSelectMaser} />}
+            {arm && <Arm id={id} card={arm} maserShort={cards.milky_way.maser_short} onSelectMaser={onSelectMaser} />}
             <button className="button-primary star-info-fly" onClick={onView}>
                 {id === 'milky_way' ? 'View the whole galaxy' : 'Fly there'}
             </button>
             <Links current={id} cards={cards} onSelect={onSelect} />
+        </div>
+    );
+}
+
+// "G049.48-00.38" -> its Galactic longitude and latitude as written
+// ("49.48", "−0.38"), or null
+const galacticFromName = (gname) => {
+    const match = /^G(\d{3}\.\d{2})([+-])(\d{2}\.\d{2})$/.exec(gname);
+    if (!match) return null;
+    return [String(Number(match[1]).toFixed(2)), `${match[2] === '-' ? '−' : ''}${Number(match[3]).toFixed(2)}`];
+};
+// To a few significant figures: no more than the measurement supports
+const roundSig = (n, sig) => Number(n.toPrecision(sig));
+
+// How it moves round the Galaxy: [[round the centre, err], [outwards, err],
+// [north, err]] km/s, or null (see Star_Data/scripts/build_galaxy.py)
+function Motion({ motion, sunSpeed, distanceTooUncertain }) {
+    if (!motion) {
+        return (
+            <span className="star-info-muted">
+                {distanceTooUncertain
+                    ? 'too uncertain: its parallax is under twice its error, so its distance (and speed) could be far off'
+                    : 'not known: part of its motion wasn\'t measured'}
+            </span>
+        );
+    }
+    const [[rot, eRot], [out, eOut], [up, eUp]] = motion;
+    return (
+        <>
+            <div>round the centre at {rot} ± {eRot} km/s</div>
+            <div>{out < 0 ? 'inwards' : 'outwards'} {Math.abs(out)} ± {eOut} km/s, {up < 0 ? 'south' : 'north'} {Math.abs(up)} ± {eUp} km/s</div>
+            <div className="star-info-muted">
+                The Sun goes round at {sunSpeed} km/s. Worked out from its parallax, proper motion (its drift across the sky)
+                and radial velocity, with their errors.
+            </div>
+        </>
+    );
+}
+
+// One measured maser. info: maserInfo() (utils/galaxy3d); onArm opens its
+// arm's (or the centre's) card
+export function MaserInfoCard({ info, cards, onArm, onView, onClose }) {
+    const lb = galacticFromName(info.gname);
+    const [plx, ePlx] = info.plx;
+    const [near, far] = info.range;
+    const openEnded = plx - ePlx <= 0;
+    const sig = info.errorPct >= 10 ? 2 : 3;
+    const ly = (n) => fmt(roundSig(n, sig));
+    return (
+        <div className="star-info region-info">
+            <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
+            <h3 className="star-info-title">{info.name}</h3>
+            <div className="star-info-subtitle">Maser · {info.armName}</div>
+            {info.note && <p className="star-info-origin">{info.note}</p>}
+            <Facts rows={[
+                ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">± {info.errorPct}%</span>
+                    <div className="star-info-muted">
+                        {openEnded ? `at least ${ly(near)} ly: its parallax is within its error of zero`
+                            : `likely ${ly(near)}–${ly(far)} ly (1σ)`}
+                    </div></>],
+                ['Parallax', <>{plx} ± {ePlx} mas <span className="star-info-muted">· its tiny yearly shift as Earth goes round the Sun (1 mas = 1/3,600,000°); distance = 1 / parallax</span></>],
+                ['Name', <>{info.gname}{lb && <span className="star-info-muted"> · its place in Galactic coordinates: longitude {lb[0]}°, latitude {lb[1]}°</span>}
+                    {info.alias && info.alias !== info.name && <div className="star-info-muted">also {info.alias}</div>}</>],
+                ['In the sky', info.constellation],
+                ['Arm', info.card
+                    ? <button className="star-info-link" onClick={onArm}>{info.armName} ›</button>
+                    : info.armName],
+                ['From the centre', `${fmt(info.rGc)} ly`],
+                ['Motion', <Motion motion={info.motion} sunSpeed={cards.milky_way.orbit_speed_km_s} distanceTooUncertain={plx < 2 * ePlx} />],
+                ['Measured by', info.refs.join('; ')],
+            ]} />
+            <p className="star-info-muted star-info-origin">{cards.milky_way.maser_short}</p>
+            <p className="star-info-muted">
+                From Reid et al. 2019, ApJ 885, 131, Table 1, which collects these measurements; the motion uses the Sun&apos;s own from their fit A5.
+            </p>
+            <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
         </div>
     );
 }

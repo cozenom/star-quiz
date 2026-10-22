@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { searchIndex } from '../utils/universe3d';
 
-const TYPE_ICONS = { constellation: '✧', star: '★', planet: '●', region: '∴', galaxy: '◎' };
+const TYPE_ICONS = { constellation: '✧', star: '★', planet: '●', region: '∴', galaxy: '◎', maser: '◌' };
 
 // Search box with a results dropdown. `/` focuses it, arrows move, Enter picks.
 function Universe3DSearch({ items, starBuffers, onSelect }) {

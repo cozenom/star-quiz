@@ -928,3 +928,26 @@ button.map-legend-title {
         display: none;
     }
 }
+
+/* A link-like button inside a card's facts (a maser's arm) */
+.star-info-link {
+    min-height: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    color: #93c5fd;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.star-info-link:hover {
+    text-decoration: underline;
+    background: none;
+    box-shadow: none;
+}
+
+/* A well-known maser in an arm's list: name row + note, as one button */
+button.galaxy-object {
+    display: block;
+}
