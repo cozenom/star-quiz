@@ -367,7 +367,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, selectedAbbrev, selectedHips, selectedRing };
+    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, selectedAbbrev, selectedHips, selectedRing, selectedRegion };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -855,6 +855,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // Click (not drag) selects a star or planet; empty space clears the selection
         let downAt = null;
         let pressedRing = null;  // ring feature id when the press began on its label
+        let pressedRegion = null;  // likewise a region's (the Oort cloud's)
         const onPointerDown = (e) => {
             downAt = { x: e.clientX, y: e.clientY };
             // Hide the hover state while dragging; it is stale once the view moves
@@ -863,18 +864,20 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         };
         const onPointerUp = (e) => {
             const ringId = pressedRing;
+            const labelRegion = pressedRegion;
             pressedRing = null;
+            pressedRegion = null;
             if (!downAt || e.button !== 0) return;
             const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
             downAt = null;
             if (moved > 5) return;
-            // Ring features are picked by their labels
-            const hit = ringId ? null : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
+            // Ring features and the Oort cloud are picked by their labels
+            const hit = ringId || labelRegion ? null : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
             setSelectedStar(hit?.type === 'star' ? hit.index : null);
             setSelectedBody(hit?.type === 'body' ? hit.id : null);
             setSelectedRing(ringId);
             // An unnamed asteroid or comet has no card of its own: its region's
-            setSelectedRegion(hit?.type === 'cloud' && SMALL_BODY_REGIONS[hit.groupId] ? hit.groupId : null);
+            setSelectedRegion(labelRegion ?? (hit?.type === 'cloud' && SMALL_BODY_REGIONS[hit.groupId] ? hit.groupId : null));
         };
         // Hover: ring + name tooltip (mouse only, throttled to one pick per frame)
         let hoverRequest = null;
@@ -933,15 +936,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             el: makeLabelEl(body.name, `universe-3d-label universe-3d-label-planet${body.id === 'Earth' ? ' universe-3d-label-earth' : ''}`),
             shown: false,
         }));
-        // Rings and gaps: clickable labels (see placeRingLabel)
-        const ringLabels = solar ? RING_FEATURES.filter(f => solar.byId.has(f.planet)).map(f => {
-            const el = makeLabelEl(f.name, `universe-3d-label universe-3d-label-ring${f.kind === 'gap' ? ' universe-3d-label-gap' : ''}`);
-            // Pressing a label hands the pointer to the canvas, so a drag
-            // that starts on it still turns the view; a press that doesn't
-            // move selects the ring (see onPointerUp)
+        // Pressing a clickable label hands the pointer to the canvas, so a
+        // drag that starts on it still turns the view; a press that doesn't
+        // move selects what onPress marked (see onPointerUp)
+        const makeClickable = (el, onPress) => {
             el.addEventListener('pointerdown', (e) => {
                 e.preventDefault();
-                pressedRing = f.id;
+                onPress();
                 canvas.dispatchEvent(new PointerEvent('pointerdown', e));
                 if (!canvas.hasPointerCapture(e.pointerId)) canvas.setPointerCapture(e.pointerId);
             });
@@ -950,6 +951,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 e.preventDefault();
                 canvas.dispatchEvent(new WheelEvent('wheel', e));
             }, { passive: false });
+        };
+        // Rings and gaps: clickable labels (see placeRingLabel)
+        const ringLabels = solar ? RING_FEATURES.filter(f => solar.byId.has(f.planet)).map(f => {
+            const el = makeLabelEl(f.name, `universe-3d-label universe-3d-label-ring${f.kind === 'gap' ? ' universe-3d-label-gap' : ''}`);
+            makeClickable(el, () => { pressedRing = f.id; });
             return {
                 feature: f,
                 el,
@@ -961,11 +967,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 minPx: f.kind === 'gap' ? RING_GAP_LABEL_PX : RING_LABEL_PX,
             };
         }) : [];
+        // Its dots aren't real objects, so its label is what you click
         const oortLabel = {
             position: new THREE.Vector3(...OORT_LABEL_POSITION),
-            el: makeLabelEl('Oort cloud (model)', 'universe-3d-label universe-3d-label-constellation'),
+            el: makeLabelEl('Oort cloud (model)', 'universe-3d-label universe-3d-label-constellation universe-3d-label-link'),
             shown: false,
+            selected: false,
         };
+        makeClickable(oortLabel.el, () => { pressedRegion = 'oort'; });
         let galaxyLabels = [];
         const placedLabels = [];
 
@@ -1064,6 +1073,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 setLabel(label, wanted ? toScreen(label.position, width, height) : null, 0, 0);
             }
             setLabel(oortLabel, opts.showLabels && oort.fade() > 0.3 ? toScreen(oortLabel.position, width, height) : null, 0, 0);
+            const oortSelected = opts.selectedRegion === 'oort';
+            if (oortSelected !== oortLabel.selected) {
+                oortLabel.el.classList.toggle('selected', oortSelected);
+                oortLabel.selected = oortSelected;
+            }
             // The galaxy's labels appear once it is built
             if (!galaxyLabels.length) {
                 galaxyLabels = galaxy.labels().map(l => ({

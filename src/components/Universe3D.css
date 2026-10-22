@@ -407,6 +407,22 @@ body:has(.universe-3d-screen) .stars-toggle {
     translate: -50% -50%;
 }
 
+/* A label you click for its card (the Oort cloud's) */
+.universe-3d-label-link {
+    pointer-events: auto;
+    touch-action: none;
+    cursor: pointer;
+}
+
+.universe-3d-label-link:hover {
+    color: #f8fafc;
+    text-decoration: underline;
+}
+
+.universe-3d-label-link.selected {
+    color: #facc15;
+}
+
 .universe-3d-label-planet {
     font-size: 0.8rem;
     color: rgba(253, 230, 138, 0.9);
