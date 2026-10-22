@@ -1,5 +1,6 @@
 import React from 'react';
 import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
+import MapLegend from './MapLegend';
 
 // The Milky Way model's cards: the galaxy as a whole (with the key to the
 // model's colours), its centre, and each spiral arm. Text and numbers are
@@ -20,12 +21,32 @@ export const GALAXY_KEY = [
     { color: hex(MASER_COLOR), ring: true, name: 'Masers', about: 'Real, not drawn to match: the measured masers at their distances. The faint line through each spans its distance\'s uncertainty, along our line of sight (cut at twice the distance when the far end is open).' },
 ];
 
-// A key swatch: a dot, or a ring for the masers' markers
+// A key swatch: a dot, a ring for the masers' markers, or a short line
+// for their distance ranges
 export function KeySwatch({ k }) {
+    if (k.line) return <span className="galaxy-legend-line" style={{ background: k.color }} />;
     const style = k.ring
         ? { background: 'transparent', border: `2px solid ${k.color}` }
         : { background: k.color, border: k.name === 'Dust' ? '1px solid #64748b' : undefined };
     return <span className="universe-3d-swatch" style={style} />;
+}
+
+// The on-screen legend, shown while the model is: short names; the card
+// (onOpen) has the explanations. Masers' entries only while they're shown.
+const LEGEND = [
+    ...GALAXY_KEY.filter(k => !k.ring),
+    { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
+    { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
+];
+export function GalaxyLegend({ showMasers, onOpen }) {
+    return (
+        <MapLegend
+            title="Milky Way (model)"
+            onTitle={onOpen}
+            storageKey="universe3d.legend.galaxy"
+            items={LEGEND.filter(k => showMasers || !k.maser).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
+        />
+    );
 }
 
 const fmt = (n) => Math.round(n).toLocaleString();

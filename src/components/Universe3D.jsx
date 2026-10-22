@@ -29,7 +29,8 @@ import {
     starRecord,
 } from '../utils/universe3d';
 import { RING_FEATURES, RING_FEATURES_BY_ID, ringLabelKm, ringPole, ringScaleKm, ringSubtitle } from '../utils/rings';
-import GalaxyInfoCard, { GALAXY_KEY, KeySwatch } from './GalaxyInfoCard';
+import GalaxyInfoCard, { GalaxyLegend } from './GalaxyInfoCard';
+import MapLegend from './MapLegend';
 import PlanetInfoCard from './PlanetInfoCard';
 import RegionInfoCard from './RegionInfoCard';
 import RingInfoCard from './RingInfoCard';
@@ -325,6 +326,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showGalaxy, setShowGalaxy] = useState(true);
     // Its real measured masers (rings), with the model
     const [showMasers, setShowMasers] = useState(true);
+    // The model is on screen (its legend shows then); set by the render loop
+    const [galaxyShown, setGalaxyShown] = useState(false);
+    // Likewise the asteroid and comet cloud
+    const [cloudShown, setCloudShown] = useState(false);
     // Its card ('milky_way', 'centre' or an arm name) and the cards' content
     // (galaxy.json, fetched when first needed: flying out, a card or search)
     const [selectedGalaxy, setSelectedGalaxy] = useState(null);
@@ -1296,6 +1301,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const targetBefore = new THREE.Vector3();
         let frameId;
         let lastDistanceLabel = '';
+        let galaxyWasShown = false;
+        let cloudWasShown = false;
         const animate = (now) => {
             advanceClock(now);
             updateFlight(now);
@@ -1324,6 +1331,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             // An open galaxy card's masers stand out
             galaxy.highlightMasers(optionsRef.current.selectedGalaxy === 'milky_way' ? null : optionsRef.current.selectedGalaxy);
             galaxy.update(camera.position, mount.clientHeight, camera.fov);
+            // Legends follow what they explain (React state only on a change)
+            const shown = galaxy.fade() > 0.3;
+            if (shown !== galaxyWasShown) {
+                galaxyWasShown = shown;
+                setGalaxyShown(shown);
+            }
+            const cloudNow = Boolean(cloud) && solarLayer.visible && solarFade >= BODY_MIN_FADE;
+            if (cloudNow !== cloudWasShown) {
+                cloudWasShown = cloudNow;
+                setCloudShown(cloudNow);
+            }
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
             [stars, gaiaStars].forEach(obj => { if (obj) obj.material.uniforms.uMinAlpha.value = minAlpha; });
             if (solar) solarLayer.near = solarNearPlane();
@@ -1728,6 +1746,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         parent: body.parentId ? body.position.distanceTo(solar.byId.get(body.parentId).position) : null,
     };
 
+    // Key to the cloud's colours: the groups drawn, while the cloud is on
+    // screen; each opens its region's card
+    const cloudLegendItems = cloudShown && smallBodies ? smallBodies.meta.groups
+        .filter(g => !hiddenGroups.has(g.id))
+        .map(g => ({
+            key: g.id,
+            swatch: <span className="universe-3d-swatch" style={{ background: SMALL_BODY_GROUP_COLORS[g.id] }} />,
+            name: g.name,
+            onClick: SMALL_BODY_REGIONS[g.id] ? () => { selectStar(null); setSelectedRegion(g.id); } : undefined,
+        })) : [];
+
     // Footer: what the view is centred on
     // (nothing when the view isn't centred on anything, e.g. after panning)
     let title = null;
@@ -1752,15 +1781,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             )
             : 'Asteroids & comets';
     } else if (focus.type === 'galaxy') {
+        // (its key is the legend, shown while the model is)
         title = focus.id === 'milky_way' ? 'Milky Way' : focus.id === 'centre' ? 'Galactic Centre' : ARM_LABELS[focus.id];
-        // Key to the model's colours
-        subtitle = (
-            <span className="universe-3d-key">
-                {GALAXY_KEY.map(k => (
-                    <span key={k.name}><KeySwatch k={k} />{k.name}</span>
-                ))}
-            </span>
-        );
+        subtitle = focus.id === 'milky_way' ? 'Our galaxy (model)' : focus.id === 'centre' ? 'Sagittarius A*' : 'Spiral arm';
     } else if (focus.type === 'ring') {
         const f = RING_FEATURES_BY_ID.get(focus.id);
         title = f.name;
@@ -2018,6 +2041,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     onClose={() => setSelectedRegion(null)}
                 />
             )}
+            {/* Keys, each only while what it explains is on screen */}
+            <div className="map-legends">
+                {cloudLegendItems.length > 0 && (
+                    <MapLegend title="Asteroids & comets" storageKey="universe3d.legend.cloud" items={cloudLegendItems} />
+                )}
+                {/* (the galaxy's cards have their own key) */}
+                {galaxyShown && !(selectedGalaxy && galaxyCards) && (
+                    <GalaxyLegend showMasers={showMasers} onOpen={() => openGalaxyCard('milky_way')} />
+                )}
+            </div>
             {selectedGalaxy && galaxyCards && (
                 <GalaxyInfoCard
                     id={selectedGalaxy}

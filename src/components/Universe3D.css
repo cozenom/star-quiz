@@ -821,3 +821,110 @@ button.region-part-head:hover {
     background: rgba(71, 85, 105, 0.5);
     color: #e2e8f0;
 }
+
+/* On-screen keys (MapLegend), shown while what they explain is: stacked
+   bottom right, above the keybinds button */
+.map-legends {
+    position: absolute;
+    right: 1rem;
+    bottom: 5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+    pointer-events: none;
+}
+
+.map-legend {
+    pointer-events: auto;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.78rem;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 8px;
+    backdrop-filter: blur(6px);
+}
+
+.map-legend-chip {
+    min-height: 0;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.78rem;
+    font-weight: 400;
+}
+
+.map-legend-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+.map-legend-title {
+    color: #e2e8f0;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.map-legend-link,
+.map-legend-fold {
+    min-height: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+button.map-legend-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.map-legend-link:hover {
+    text-decoration: underline;
+    box-shadow: none;
+    background: none;
+}
+
+.map-legend-fold {
+    width: 1.2rem;
+    color: #94a3b8;
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.map-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    line-height: 1.6;
+    color: #cbd5e1;
+}
+
+.map-legend-row .universe-3d-swatch {
+    width: 0.65rem;
+    height: 0.65rem;
+}
+
+.galaxy-legend-line {
+    flex-shrink: 0;
+    width: 0.65rem;
+    height: 2px;
+    opacity: 0.7;
+}
+
+@media (max-width: 767px) {
+    .map-legends {
+        bottom: 4.5rem;
+    }
+
+    /* A card is a bottom sheet there */
+    .universe-3d-screen.has-card .map-legends {
+        display: none;
+    }
+}
