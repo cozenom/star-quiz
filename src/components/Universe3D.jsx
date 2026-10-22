@@ -9,7 +9,7 @@ import { createStarDisc, radiusToLy } from '../utils/starDisc';
 import { buildSolarSystem, ECLIPTIC_NORTH, minViewRadii } from '../utils/solarSystem3d';
 import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '../utils/smallBodies3d';
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
-import { ARM_LABELS, GALAXY_SEARCH, buildGalaxy, galaxyPose } from '../utils/galaxy3d';
+import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose } from '../utils/galaxy3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -101,7 +101,10 @@ const REGION_VIEW_AU = {
 // brighter from Neptune to Mercury. The 1e-9 pc clamp (~0.0002 AU) only
 // guards log(0); the camera never gets that close to a star centre.
 // uMinAlpha keeps stars too faint for the eye as dim dots, so the shape of
-// the catalogue (the Gaia 100 pc sphere) shows from outside.
+// the catalogue (the Gaia 100 pc sphere) shows from outside. It fades out
+// as the galaxy model fades in: from kiloparsecs away those dots all pile
+// into a few pixels and burn white, where the real neighbourhood looks like
+// any other patch of the disc (which the model already draws).
 // Positions are made camera-relative on the GPU from the camera split into
 // a float32 part and the remainder (uCamHigh + uCamLow, see setStarCamera):
 // position - uCamHigh is exact when the two are close, so a star stays put
@@ -1302,6 +1305,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             oort.update(camera.position.length());
             galaxy.setVisible(optionsRef.current.showGalaxy);
             galaxy.update(camera.position, mount.clientHeight, camera.fov);
+            const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
+            [stars, gaiaStars].forEach(obj => { if (obj) obj.material.uniforms.uMinAlpha.value = minAlpha; });
             if (solar) solarLayer.near = solarNearPlane();
             starDisc.update(camera, mount.clientHeight);
             syncCameras();

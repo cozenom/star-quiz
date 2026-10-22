@@ -27,8 +27,9 @@ import { random } from './oortCloud.js';
 const LY_PER_KPC = 3261.563777;
 
 // Shown between these camera distances from the Sun (ly): fading in once
-// the catalogue's stars are a cloud behind you
-const FADE_IN_LY = [2000, 12000];
+// the catalogue's stars are a cloud behind you (their too-faint-to-see dots
+// fade out over the same range: the model's disc stands in for them)
+export const FADE_IN_LY = [2000, 12000];
 // Built (data fetched, points scattered) once the camera is this far out
 const BUILD_LY = 1000;
 

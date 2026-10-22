@@ -41,7 +41,9 @@ const TYPICAL_ORBIT_AU = {
 };
 const DIM_RADII = 2;
 // Dimmest a dot gets: fainter ones round to nothing in the 8-bit frame
-// (contributions under 1/255), and the patch would vanish instead of glowing
+// (contributions under 1/255), and the patch would vanish instead of glowing.
+// Past that, dots are thinned out instead (a fixed, random-looking subset is
+// dropped), so the patch keeps dimming rather than burning white.
 const MIN_ALPHA = 0.008;
 // Trojans (1:1) and Hildas (3:2) are held in place by Jupiter, which a
 // two-body orbit leaves out: each would drift at its own rate and the
@@ -67,8 +69,19 @@ const vertexShader = `
     uniform float uDays;       // days since the elements' epoch
     uniform float uSize;
     uniform float uMeanMotion; // rad/day; 0: its own (Kepler's third law)
+    uniform float uAlpha;
+    uniform float uDim;
+    // Integer hash of the point's index -> 0..1
+    float pointHash() {
+        uint x = uint(gl_VertexID);
+        x ^= x >> 16; x *= 0x7feb352du;
+        x ^= x >> 15; x *= 0x846ca68bu;
+        x ^= x >> 16;
+        return float(x) / 4294967296.0;
+    }
     void main() {
-        if (aPart < ${MAX_PARTS}.0 && uPartHidden[int(aPart)] > 0.5) {
+        bool thinned = pointHash() * ${MIN_ALPHA} >= uAlpha * uDim;  // see MIN_ALPHA
+        if (thinned || (aPart < ${MAX_PARTS}.0 && uPartHidden[int(aPart)] > 0.5)) {
             gl_PointSize = 0.0;
             gl_Position = vec4(2.0, 2.0, 2.0, 1.0);  // outside the view
             return;
@@ -159,6 +172,10 @@ function pointPosition(rows, k, logA, meanMotion, days, out, o) {
 // both near the Sun and far out, as for the named bodies)
 const ORBIT_LINE_POINTS = 64;
 const ORBIT_LINE_OPACITY = 0.1;
+// Lines add up too: a group's lines dim by its distance ratio (see
+// TYPICAL_ORBIT_AU), linearly, since a line's drawn length shrinks with
+// distance while a patch's area shrinks with its square
+const lineDim = (groupId, au) => Math.min(1, DIM_RADII * TYPICAL_ORBIT_AU[groupId] / Math.max(au, 1e-9));
 // Comet orbits are drawn and coloured by family, from the period (years);
 // ids as small_bodies.json's comet subgroups
 export const COMET_FAMILIES = [
@@ -275,6 +292,11 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
     // for: two-body orbits never change shape, so once is enough
     orbitLines = new Map();  // group id -> [{sub, lines}]
     let fadeNow = 1;
+    let cameraAu = 0;
+    const lineOpacity = (id) => ORBIT_LINE_OPACITY * fadeNow * lineDim(id, cameraAu);
+    const applyLineOpacity = () => {
+        for (const [id, parts] of orbitLines) parts.forEach(({ lines }) => { lines.material.opacity = lineOpacity(id); });
+    };
     const buildOrbitLines = (id) => {
         const g = meta.groups.findIndex(x => x.id === id);
         const start = meta.tiers[0].group_counts.slice(0, g).reduce((n, c) => n + c, 0);
@@ -295,7 +317,7 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
             const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
-                color, transparent: true, opacity: ORBIT_LINE_OPACITY * fadeNow,
+                color, transparent: true, opacity: lineOpacity(id),
                 depthWrite: false, blending: THREE.AdditiveBlending,
             }));
             lines.frustumCulled = false;
@@ -376,7 +398,7 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
         setFade: (f) => {
             shared.uFade.value = f;
             fadeNow = f;
-            for (const parts of orbitLines.values()) parts.forEach(({ lines }) => { lines.material.opacity = ORBIT_LINE_OPACITY * f; });
+            applyLineOpacity();
         },
         // Dim crowded groups (see TYPICAL_ORBIT_AU). Call each frame with
         // the camera's distance from the Sun (AU).
@@ -385,6 +407,8 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
                 const ratio = DIM_RADII * TYPICAL_ORBIT_AU[groupId] / Math.max(au, 1e-9);
                 points.material.uniforms.uDim.value = Math.min(1, ratio * ratio);
             }
+            cameraAu = au;
+            applyLineOpacity();
         },
         setVisible: (on) => { group.visible = on; },
         setGroupVisible: (id, on) => {
