@@ -92,6 +92,21 @@ const REGION_VIEW_AU = {
     main: 9, hilda: 12, trojan: 16, neo: 4, centaur: 70, tno: 140, comet: 14, other: 10, oort: 400000,
 };
 
+// "Show lines" options, one per kind of line (lineKinds keys). needs: what
+// else must be on for it to be drawn ('planets' or 'masers'); the option
+// is greyed out without it
+const LINE_OPTIONS = [
+    { kind: 'constellation', label: 'Selected constellation', title: 'The figure of the constellation picked in search, in blue' },
+    { kind: 'allConstellations', label: 'All constellations', title: 'All 88 figures, faint, with their names' },
+    { kind: 'planetOrbits', label: 'Planet orbits', needs: 'planets' },
+    { kind: 'moonOrbits', label: 'Moon orbits', needs: 'planets', title: 'The larger moons\' orbits, and a selected small moon\'s' },
+    {
+        kind: 'smallBodyOrbits', label: 'Asteroid & comet orbits', needs: 'planets',
+        title: 'Pluto and the other dwarf planets, a selected asteroid or comet, and every comet when viewing the Comets region',
+    },
+    { kind: 'maserRanges', label: 'Maser distance ranges', needs: 'masers', title: 'The faint line through each measured maser: its distance\'s uncertainty' },
+];
+
 // Points shader: each star stores its absolute magnitude, and the apparent
 // magnitude is recomputed from the camera distance every frame. From Earth
 // this reproduces the real sky; flying closer makes a star brighter.
@@ -305,11 +320,20 @@ const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2
 function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallBodies, onBack }) {
     // Constellation picked in search (abbrev), or null: none drawn
     const [selectedAbbrev, setSelectedAbbrev] = useState(null);
+    // Lines: all of them (L), and each kind alone (see LINE_OPTIONS); a
+    // kind is drawn while both are on
     const [showLines, setShowLines] = useState(true);
-    const [showAllLines, setShowAllLines] = useState(false);
+    const [lineKinds, setLineKinds] = useState({
+        constellation: true,
+        allConstellations: false,
+        planetOrbits: true,
+        moonOrbits: true,
+        smallBodyOrbits: true,
+        maserRanges: true,
+    });
+    const linesOn = (kind) => showLines && lineKinds[kind];
     const [showLabels, setShowLabels] = useState(true);
     const [showPlanets, setShowPlanets] = useState(true);
-    const [showOrbits, setShowOrbits] = useState(true);
     const [showSmallMoons, setShowSmallMoons] = useState(true);
     // Asteroids and comets: the named ones (showSmallBodies), the point
     // cloud's hidden groups (small_bodies.json group ids), and whether the
@@ -419,7 +443,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
+    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -1145,7 +1169,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             }
             for (const label of constellationLabels) {
                 const wanted = opts.showLabels && (
-                    label.abbrev === opts.selectedAbbrev || (opts.showLines && opts.showAllLines)
+                    label.abbrev === opts.selectedAbbrev || (opts.showLines && opts.lineKinds.allConstellations)
                 );
                 setLabel(label, wanted ? toScreen(label.position, width, height) : null, 0, 0);
             }
@@ -1355,6 +1379,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             oort.update(camera.position.length());
             galaxy.setVisible(optionsRef.current.showGalaxy);
             galaxy.setMasersVisible(optionsRef.current.showMasers);
+            galaxy.setMaserRangesVisible(optionsRef.current.showLines && optionsRef.current.lineKinds.maserRanges);
             // An open galaxy card's masers stand out (a maser's: its arm's)
             const openMaser = optionsRef.current.selectedMaser !== null ? galaxy.maser(optionsRef.current.selectedMaser) : null;
             galaxy.highlightMasers(openMaser ? openMaser.card
@@ -1628,7 +1653,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             0.8,
             s.haze
         );
-        s.selectedLines.visible = showLines;
+        s.selectedLines.visible = linesOn('constellation');
         s.scene.add(s.selectedLines);
     }, [selectedAbbrev, starBuffers, planetFacts]);
 
@@ -1636,23 +1661,24 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     useEffect(() => {
         const s = sceneRef.current;
         if (!s) return;
-        if (s.selectedLines) s.selectedLines.visible = showLines;
-        if (showLines && showAllLines && !s.allLines) {
+        if (s.selectedLines) s.selectedLines.visible = linesOn('constellation');
+        if (linesOn('allConstellations') && !s.allLines) {
             const flat = Object.values(constellationData)
                 .flatMap(c => constellationLinePositions(c, starBuffers));
             s.allLines = makeLines(flat, 0x94a3b8, 0.25, s.haze);
             s.scene.add(s.allLines);
         }
-        if (s.allLines) s.allLines.visible = showLines && showAllLines;
-    }, [showLines, showAllLines, starBuffers]);
+        if (s.allLines) s.allLines.visible = linesOn('allConstellations');
+        s.solar?.setShowOrbits({
+            planets: linesOn('planetOrbits'),
+            moons: linesOn('moonOrbits'),
+            smallBodies: linesOn('smallBodyOrbits'),
+        });
+    }, [showLines, lineKinds, starBuffers, planetFacts, moonsData, smallBodies]);
 
     useEffect(() => {
         sceneRef.current?.setHaze(showHaze);
     }, [showHaze, starBuffers]);
-
-    useEffect(() => {
-        sceneRef.current?.solar?.setShowOrbits(showOrbits);
-    }, [showOrbits, starBuffers, planetFacts, moonsData]);
 
     useEffect(() => {
         sceneRef.current?.solar?.setShowMinorMoons(showSmallMoons);
@@ -1660,13 +1686,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
 
 
     // Viewing the "Comets" region draws every comet's orbit, named and in
-    // the cloud, until the view moves on
+    // the cloud, until the view moves on (the named ones are hidden with
+    // the other small-body orbits, see setShowOrbits)
     useEffect(() => {
         const s = sceneRef.current;
         const on = selectedRegion === 'comet' || (focus.type === 'region' && focus.id === 'comet');
-        s?.cloud?.setGroupOrbits('comet', on);
+        s?.cloud?.setGroupOrbits('comet', on && linesOn('smallBodyOrbits'));
         s?.solar?.setCometOrbits(on);
-    }, [focus, selectedRegion, starBuffers, planetFacts, moonsData, smallBodies]);
+    }, [focus, selectedRegion, showLines, lineKinds, starBuffers, planetFacts, moonsData, smallBodies]);
 
     useEffect(() => {
         const cloud = sceneRef.current?.cloud;
@@ -1884,15 +1911,22 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     />
                     Show lines
                 </label>
-                <label className={`universe-3d-checkbox universe-3d-sub-option ${showLines ? '' : 'disabled'}`}>
-                    <input
-                        type="checkbox"
-                        checked={showAllLines}
-                        disabled={!showLines}
-                        onChange={(e) => setShowAllLines(e.target.checked)}
-                    />
-                    All constellations
-                </label>
+                {LINE_OPTIONS.filter(o => planetFacts || o.needs !== 'planets').map(o => {
+                    const off = !showLines
+                        || (o.needs === 'planets' && !showPlanets)
+                        || (o.needs === 'masers' && !(showGalaxy && showMasers));
+                    return (
+                        <label key={o.kind} className={`universe-3d-checkbox universe-3d-sub-option ${off ? 'disabled' : ''}`} title={o.title}>
+                            <input
+                                type="checkbox"
+                                checked={lineKinds[o.kind]}
+                                disabled={off}
+                                onChange={(e) => setLineKinds(prev => ({ ...prev, [o.kind]: e.target.checked }))}
+                            />
+                            {o.label}
+                        </label>
+                    );
+                })}
                 <label className="universe-3d-checkbox">
                     <input
                         type="checkbox"
@@ -1910,15 +1944,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                                 onChange={(e) => setShowPlanets(e.target.checked)}
                             />
                             Planets
-                        </label>
-                        <label className={`universe-3d-checkbox universe-3d-sub-option ${showPlanets ? '' : 'disabled'}`}>
-                            <input
-                                type="checkbox"
-                                checked={showOrbits}
-                                disabled={!showPlanets}
-                                onChange={(e) => setShowOrbits(e.target.checked)}
-                            />
-                            Orbits
                         </label>
                         {moonsData && (
                             <label
@@ -2110,7 +2135,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 )}
                 {/* (the galaxy's cards have their own key) */}
                 {(galaxyShown || masersShown) && !(selectedGalaxy && galaxyCards) && (
-                    <GalaxyLegend showModel={galaxyShown} showMasers={masersShown} onOpen={() => openGalaxyCard('milky_way')} />
+                    <GalaxyLegend
+                        showModel={galaxyShown}
+                        showMasers={masersShown}
+                        showRanges={linesOn('maserRanges')}
+                        onOpen={() => openGalaxyCard('milky_way')}
+                    />
                 )}
             </div>
             {selectedGalaxy && galaxyCards && (

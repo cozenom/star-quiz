@@ -536,6 +536,7 @@ function buildMasers(m, pixelRatio) {
         },
         // id: a card ('centre' or an arm name) whose masers stay bright, or null
         setHighlight: (id) => { highlight.value = id ? CARD_IDS.indexOf(id) : -1; },
+        setRangesVisible: (on) => { lines.visible = on; },
         info: (i) => maserInfo(m, i),
         // Index of the maser drawn nearest (x, y) px within radiusPx, or null
         pick: (camera, width, height, x, y, radiusPx) => {
@@ -558,7 +559,8 @@ function buildMasers(m, pixelRatio) {
 // load: () => Promise of galaxy.json (fetched on first need).
 // Returns update(cameraPosition ly, viewportHeightPx, fovDeg),
 // fade(), labels() [{id, name, position (ly)}], setVisible(on),
-// setMasersVisible(on), highlightMasers(cardId or null),
+// setMasersVisible(on), setMaserRangesVisible(on) (their distance ranges),
+// highlightMasers(cardId or null),
 // pickMaser(camera, width, height, x, y, radiusPx) -> index | null,
 // maser(index) -> maserInfo, maserFade() (0..1: they fade in sooner than
 // the model), dispose()
@@ -571,6 +573,7 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
     scene.add(maserGroup);
     let masers = null;
     let masersWanted = true;
+    let rangesWanted = true;
     let highlighted = null;
     const starMaterial = new THREE.ShaderMaterial({
         uniforms: { uPixelRatio: { value: pixelRatio }, uFade: { value: 0 } },
@@ -634,6 +637,7 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             masers = buildMasers(data.masers, pixelRatio);
             maserGroup.add(...masers.objects);
             masers.setHighlight(highlighted);
+            masers.setRangesVisible(rangesWanted);
         }
         state = 'ready';
     };
@@ -664,6 +668,10 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
         labels: () => labels,
         setVisible: (on) => { wanted = on; },
         setMasersVisible: (on) => { masersWanted = on; },
+        setMaserRangesVisible: (on) => {
+            rangesWanted = on;
+            masers?.setRangesVisible(on);
+        },
         highlightMasers: (id) => {
             highlighted = id;
             masers?.setHighlight(id);

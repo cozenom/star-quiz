@@ -39,14 +39,14 @@ const LEGEND = [
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
 ];
 // showModel: the model is on screen; showMasers: its masers are (they
-// fade in before the model does)
-export function GalaxyLegend({ showModel, showMasers, onOpen }) {
+// fade in before the model does); showRanges: their distance ranges are drawn
+export function GalaxyLegend({ showModel, showMasers, showRanges = true, onOpen }) {
     return (
         <MapLegend
             title="Milky Way (model)"
             onTitle={onOpen}
             storageKey="universe3d.legend.galaxy"
-            items={LEGEND.filter(k => (k.maser ? showMasers : showModel)).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
+            items={LEGEND.filter(k => (k.maser ? showMasers && (!k.line || showRanges) : showModel)).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
         />
     );
 }

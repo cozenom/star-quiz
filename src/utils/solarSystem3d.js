@@ -562,7 +562,7 @@ function moonFacts(m) {
 //           planets first, then major moons, minor moons, small bodies
 //   byId:   Map id -> body
 //   isShown(body): false for small bodies while they're switched off
-//   update(date), setFade(f), setShowOrbits(on), setHighlightOrbit(id),
+//   update(date), setFade(f), setShowOrbits({planets, moons, smallBodies}), setHighlightOrbit(id),
 //   setShowSmallBodies(on), setCometOrbits(on) (every named comet's),
 //   updateTextures(cameraAu, heightPx, fovDeg) (call each frame: lazy loading),
 //   updateMinorMoonFade(cameraAu, heightPx, fovDeg), minorMoonFade(planetId),
@@ -891,24 +891,25 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
     // each frame the body's own position is put into the line between the
     // two samples around it (bodyAt): the line always passes through it.
     const orbits = [];  // {line, sample(date), periodDays, sampledAt (ms) | null, ...}
+    // One group per kind of orbit, each switched alone (setShowOrbits).
+    // Pluto goes with the small bodies (the other dwarf planets are there).
+    const orbitKinds = { planets: new THREE.Group(), moons: new THREE.Group(), smallBodies: new THREE.Group() };
+    orbitGroup.add(...Object.values(orbitKinds));
     const moonOrbitGroups = new Map();  // planet id -> Group
     const moonOrbitGroup = (planetId) => {
         if (!moonOrbitGroups.has(planetId)) {
             const group = new THREE.Group();
-            orbitGroup.add(group);
+            orbitKinds.moons.add(group);
             moonOrbitGroups.set(planetId, group);
         }
         return moonOrbitGroups.get(planetId);
     };
-    // Small bodies' orbits, hidden with them (setShowSmallBodies)
-    const smallOrbitGroup = new THREE.Group();
-    orbitGroup.add(smallOrbitGroup);
     // everyFrame: resampled whenever the time changes (small bodies: cheap
     // to sample, and their body must sit exactly on its line up close).
     // bodyAt() -> Vector3: the body in the line's frame (sampleOrbit lines,
     // see placeBody), so the line can be drawn through it
     // body: a small body whose orbit this is (hidden with it, see isShown)
-    const addOrbit = ({ sample, periodDays, color, opacity, parent = orbitGroup, segments, closed = true, everyFrame = false, bodyAt = null, body = null }) => {
+    const addOrbit = ({ sample, periodDays, color, opacity, parent = orbitKinds.planets, segments, closed = true, everyFrame = false, bodyAt = null, body = null }) => {
         const vertices = bodyAt ? segments + 1 : segments;
         const line = makeOrbitLine(new Float32Array(vertices * 3), color, opacity, closed);
         line.frustumCulled = false;  // samples move round the orbit
@@ -981,6 +982,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
             addOrbit({
                 sample: (d) => orbitPath(id, d), periodDays: orbitPeriodDays(id), color: body.color, segments: 512,
                 bodyAt: () => body.position,
+                parent: body.type === 'dwarf planet' ? orbitKinds.smallBodies : orbitKinds.planets,
             });
         }
     }
@@ -997,7 +999,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
     const smallBodyOrbitLine = (body, opacity) => addOrbit({
         sample: (d) => smallBodyOrbit(body.smallBody, d, 512),
         periodDays: smallBodyPeriodDays(body.smallBody), color: body.color, opacity,
-        parent: smallOrbitGroup, segments: 513, closed: false, everyFrame: true, body,
+        parent: orbitKinds.smallBodies, segments: 513, closed: false, everyFrame: true, body,
     });
     for (const body of smallBodyList.filter(b => b.type === 'dwarf planet')) smallBodyOrbitLine(body);
 
@@ -1234,13 +1236,12 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         ...bodies.filter(b => b.dot).map(b => b.dot.material),
         ...[...clouds.values()].map(c => c.cloud.material),
     ];
-    let showOrbits = true;
     let showMinorMoons = true;
     let fade = 1;
     let hazeOn = false;
     let viewportPx = 1;
     function applyOrbitOpacity() {
-        orbitGroup.visible = showOrbits && fade > 0;
+        orbitGroup.visible = fade > 0;
         orbits.forEach(({ line }) => { line.material.opacity = line.userData.baseOpacity * fade; });
     }
 
@@ -1258,8 +1259,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         update,
         setShowSmallBodies: (on) => {
             showSmallBodies = on;
-            smallOrbitGroup.visible = on;
-            applySmallBodyVisibility();
+            applySmallBodyVisibility();  // their orbit lines too
         },
         // 1 near the Sun, 0 far out (log scale), from camera distance in AU
         fadeForDistance: (au) => 1 - THREE.MathUtils.smoothstep(
@@ -1271,9 +1271,9 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
             dotMaterials.forEach(m => { m.uniforms.uFade.value = f; });
             applyOrbitOpacity();
         },
-        setShowOrbits: (on) => {
-            showOrbits = on;
-            applyOrbitOpacity();
+        // kinds: {planets, moons, smallBodies} -> on (see orbitKinds)
+        setShowOrbits: (kinds) => {
+            for (const [kind, group] of Object.entries(orbitKinds)) group.visible = Boolean(kinds[kind]);
         },
         // Fade each small-moon cloud by how big it is drawn. cameraAu: camera
         // position (AU); heightPx: viewport height (CSS px); fovDeg: vertical FOV.
