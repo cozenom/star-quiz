@@ -82,8 +82,6 @@ const RING_GAP_LABEL_PX = 6;
 const RING_LABEL_MARGIN_PX = 24;
 // Points tried around a ring for its label when its right-hand end is off screen
 const RING_LABEL_SAMPLES = 48;
-// "Ring waves" option: how much the moon-driven ring edges are exaggerated
-const RING_WAVE_EXAGGERATION = 10;
 // Viewing a ring feature: this many times its size away, at least the minimum
 const RING_VIEW_SCALE = 5;
 const RING_VIEW_MIN_KM = 2000;
@@ -309,7 +307,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showPlanets, setShowPlanets] = useState(true);
     const [showOrbits, setShowOrbits] = useState(true);
     const [showSmallMoons, setShowSmallMoons] = useState(true);
-    const [exaggerateRingWaves, setExaggerateRingWaves] = useState(false);
     // Asteroids and comets: the named ones (showSmallBodies), the point
     // cloud's hidden groups (small_bodies.json group ids), and whether the
     // big "more" tier (all 1.5 million) is drawn. Each is switched alone;
@@ -1563,9 +1560,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         sceneRef.current?.solar?.setShowMinorMoons(showSmallMoons);
     }, [showSmallMoons, starBuffers, planetFacts, moonsData]);
 
-    useEffect(() => {
-        sceneRef.current?.solar?.setRingWaveScale(exaggerateRingWaves ? RING_WAVE_EXAGGERATION : 1);
-    }, [exaggerateRingWaves, starBuffers, planetFacts, moonsData]);
 
     // Viewing the "Comets" region draws every comet's orbit, named and in
     // the cloud, until the view moves on
@@ -1831,18 +1825,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                                 Small moons
                             </label>
                         )}
-                        <label
-                            className={`universe-3d-checkbox universe-3d-sub-option ${showPlanets ? '' : 'disabled'}`}
-                            title={`Waves and lobes that moons raise on the edges of Saturn's rings, ${RING_WAVE_EXAGGERATION}× their real size`}
-                        >
-                            <input
-                                type="checkbox"
-                                checked={exaggerateRingWaves}
-                                disabled={!showPlanets}
-                                onChange={(e) => setExaggerateRingWaves(e.target.checked)}
-                            />
-                            Ring waves ×{RING_WAVE_EXAGGERATION}
-                        </label>
                         {smallBodies && (
                             <>
                                 <label
