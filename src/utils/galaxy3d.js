@@ -75,6 +75,13 @@ const DUST_EDGE_ON = 0.3;
 // Dust sprites larger than this (px) fade out: they'd fill the screen
 // when the camera is inside the disc
 const DUST_MAX_PX = [24, 72];
+// The measured masers (Reid et al. 2019 Table 1): real positions, drawn as
+// rings, each with a faint line along the sightline over its distance's
+// 1-sigma range. With a card open, the other arms' masers dim to this.
+export const MASER_COLOR = 0x5eead4;
+const MASER_SIZE_PX = 8;
+const MASER_RANGE_OPACITY = 0.35;
+const MASER_DIMMED = 0.25;
 
 const starVertexShader = `
     attribute vec3 color;
@@ -126,6 +133,51 @@ const dustFragmentShader = `
         float a = (1.0 - smoothstep(0.0, 1.0, r)) * vAlpha * uFade;
         if (a < 0.002) discard;
         gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+    }
+`;
+
+// Masers: group = which card they belong to (index into the cards list,
+// -1 none); uHighlight picks one card's (-1: all bright)
+const maserVertexShader = `
+    attribute float group;
+    uniform float uPixelRatio;
+    uniform float uHighlight;
+    uniform float uDimmed;
+    varying float vBright;
+    void main() {
+        vBright = uHighlight < 0.0 || abs(group - uHighlight) < 0.5 ? 1.0 : uDimmed;
+        gl_PointSize = ${MASER_SIZE_PX.toFixed(1)} * uPixelRatio;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+`;
+const maserFragmentShader = `
+    uniform vec3 uColor;
+    uniform float uFade;
+    varying float vBright;
+    void main() {
+        float r = length(gl_PointCoord - 0.5) * 2.0;
+        float ring = smoothstep(0.45, 0.6, r) * (1.0 - smoothstep(0.85, 1.0, r));
+        float a = ring * uFade * vBright;
+        if (a < 0.01) discard;
+        gl_FragColor = vec4(uColor, a);
+    }
+`;
+const maserLineVertexShader = `
+    attribute float group;
+    uniform float uHighlight;
+    uniform float uDimmed;
+    varying float vBright;
+    void main() {
+        vBright = uHighlight < 0.0 || abs(group - uHighlight) < 0.5 ? 1.0 : uDimmed;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+`;
+const maserLineFragmentShader = `
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    varying float vBright;
+    void main() {
+        gl_FragColor = vec4(uColor, uOpacity * vBright);
     }
 `;
 
@@ -373,13 +425,117 @@ export function galaxyPose(data, id) {
     return { position: target.clone().addScaledVector(dir, distance).toArray(), target: target.toArray(), minDistance: 100 };
 }
 
+// Cards a maser can belong to, in the order of its `group` attribute
+const CARD_IDS = ['centre', ...Object.keys(ARM_LABELS)];
+
+// The measured masers: rings + distance ranges, in the scene frame (ly).
+// Returns {objects, geometries, materials, info: maser(i), pick, setHighlight}
+function buildMasers(m, pixelRatio) {
+    const n = m.name.length;
+    const groupOf = m.card.map(c => CARD_IDS.indexOf(c));
+    const color = new THREE.Color().setHex(MASER_COLOR, THREE.LinearSRGBColorSpace);
+    const highlight = { value: -1 };
+    const dimmed = { value: MASER_DIMMED };
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(m.xyz_ly, 3));
+    g.setAttribute('group', new THREE.Float32BufferAttribute(groupOf, 1));
+    const ringMaterial = new THREE.ShaderMaterial({
+        uniforms: { uPixelRatio: { value: pixelRatio }, uColor: { value: color }, uFade: { value: 0 }, uHighlight: highlight, uDimmed: dimmed },
+        vertexShader: maserVertexShader,
+        fragmentShader: maserFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+    });
+    const rings = new THREE.Points(g, ringMaterial);
+    // After the model's stars and dust, so the dust never hides them
+    rings.renderOrder = -1;
+    rings.frustumCulled = false;
+
+    const linePos = new Float32Array(n * 6);
+    const lineGroup = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+        const [near, far] = m.range_ly[i];
+        for (let k = 0; k < 3; k++) {
+            linePos[6 * i + k] = m.unit[3 * i + k] * near;
+            linePos[6 * i + 3 + k] = m.unit[3 * i + k] * far;
+        }
+        lineGroup[2 * i] = lineGroup[2 * i + 1] = groupOf[i];
+    }
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
+    lg.setAttribute('group', new THREE.BufferAttribute(lineGroup, 1));
+    const lineMaterial = new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: color }, uOpacity: { value: 0 }, uHighlight: highlight, uDimmed: dimmed },
+        vertexShader: maserLineVertexShader,
+        fragmentShader: maserLineFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+    });
+    const lines = new THREE.LineSegments(lg, lineMaterial);
+    lines.renderOrder = -1;
+    lines.frustumCulled = false;
+
+    const armName = (i) => (m.card[i] === 'centre' ? 'Galactic Centre' : ARM_LABELS[m.card[i]] ?? m.arm[i]);
+    const projected = new THREE.Vector3();
+    return {
+        objects: [lines, rings],
+        geometries: [g, lg],
+        materials: [ringMaterial, lineMaterial],
+        setFade: (f) => {
+            ringMaterial.uniforms.uFade.value = f;
+            lineMaterial.uniforms.uOpacity.value = f * MASER_RANGE_OPACITY;
+        },
+        // id: a card ('centre' or an arm name) whose masers stay bright, or null
+        setHighlight: (id) => { highlight.value = id ? CARD_IDS.indexOf(id) : -1; },
+        // {name, card, position (ly array), label}: "W51 Main · 17,600 ly ± 5% · Sagittarius–Carina Arm"
+        info: (i) => {
+            const name = m.alias[i] || m.name[i];
+            const err = m.error_pct[i];
+            return {
+                name,
+                card: m.card[i],
+                position: m.xyz_ly.slice(3 * i, 3 * i + 3),
+                label: `${name}${m.alias[i] ? ` (${m.name[i]})` : ''} · maser, ${m.distance_ly[i].toLocaleString()} ly`
+                    + ` ± ${err}% · ${armName(i)}`,
+            };
+        },
+        // Index of the maser drawn nearest (x, y) px within radiusPx, or null
+        pick: (camera, width, height, x, y, radiusPx) => {
+            let best = null;
+            let bestD = radiusPx;
+            for (let i = 0; i < n; i++) {
+                projected.fromArray(m.xyz_ly, 3 * i).project(camera);
+                if (projected.z > 1 || projected.z < -1) continue;
+                const d = Math.hypot((projected.x + 1) / 2 * width - x, (1 - projected.y) / 2 * height - y);
+                if (d < bestD) {
+                    bestD = d;
+                    best = i;
+                }
+            }
+            return best;
+        },
+    };
+}
+
 // load: () => Promise of galaxy.json (fetched on first need).
 // Returns update(cameraPosition ly, viewportHeightPx, fovDeg),
-// fade(), labels() [{id, name, position (ly)}], setVisible(on), dispose()
+// fade(), labels() [{id, name, position (ly)}], setVisible(on),
+// setMasersVisible(on), highlightMasers(cardId or null),
+// pickMaser(camera, width, height, x, y, radiusPx) -> index | null,
+// maser(index) -> {name, card, position, label}, dispose()
 export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
     const group = new THREE.Group();
     group.matrixAutoUpdate = false;
     scene.add(group);
+    // The masers are placed in the scene frame directly (ly)
+    const maserGroup = new THREE.Group();
+    scene.add(maserGroup);
+    let masers = null;
+    let masersWanted = true;
+    let highlighted = null;
     const starMaterial = new THREE.ShaderMaterial({
         uniforms: { uPixelRatio: { value: pixelRatio }, uFade: { value: 0 } },
         vertexShader: starVertexShader,
@@ -438,8 +594,14 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             if (arm.label < 0 || !ARM_LABELS[arm.name]) continue;
             labels.push({ id: arm.name, name: ARM_LABELS[arm.name], position: toLy(arm.xy_kpc[2 * arm.label], arm.xy_kpc[2 * arm.label + 1], 0) });
         }
+        if (data.masers) {
+            masers = buildMasers(data.masers, pixelRatio);
+            maserGroup.add(...masers.objects);
+            masers.setHighlight(highlighted);
+        }
         state = 'ready';
     };
+    const masersShown = () => masers !== null && wanted && masersWanted && fade > 0;
 
     return {
         update: (cameraPosition, viewportHeightPx, fovDeg) => {
@@ -456,16 +618,30 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             starMaterial.uniforms.uFade.value = fade;
             dustMaterial.uniforms.uFade.value = fade;
             dustMaterial.uniforms.uFocalPx.value = viewportHeightPx * pixelRatio / (2 * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
+            maserGroup.visible = masersShown();
+            masers?.setFade(fade);
         },
         // How visible it is now (0..1), for its labels
         fade: () => (wanted ? fade : 0),
         labels: () => labels,
         setVisible: (on) => { wanted = on; },
+        setMasersVisible: (on) => { masersWanted = on; },
+        highlightMasers: (id) => {
+            highlighted = id;
+            masers?.setHighlight(id);
+        },
+        // Picked only once they're clearly visible
+        pickMaser: (camera, width, height, x, y, radiusPx) => (
+            masersShown() && fade > 0.3 ? masers.pick(camera, width, height, x, y, radiusPx) : null
+        ),
+        maser: (i) => masers.info(i),
         dispose: () => {
-            scene.remove(group);
+            scene.remove(group, maserGroup);
             geometries.forEach(g => g.dispose());
             starMaterial.dispose();
             dustMaterial.dispose();
+            masers?.geometries.forEach(g => g.dispose());
+            masers?.materials.forEach(m => m.dispose());
         },
     };
 }

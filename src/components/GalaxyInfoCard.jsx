@@ -1,5 +1,5 @@
 import React from 'react';
-import { ARM_LABELS, GALAXY_COLORS } from '../utils/galaxy3d';
+import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
 
 // The Milky Way model's cards: the galaxy as a whole (with the key to the
 // model's colours), its centre, and each spiral arm. Text and numbers are
@@ -17,7 +17,16 @@ export const GALAXY_KEY = [
     { color: hex(GALAXY_COLORS.clumps[0]), name: 'Star clusters', about: 'Young stars born together in groups (OB associations), still close to one another.' },
     { color: hex(GALAXY_COLORS.hii[0]), name: 'Glowing gas', about: 'Hydrogen lit up by young hot stars glows red-pink (H II regions), like the Orion Nebula.' },
     { color: '#15110d', name: 'Dust', about: 'Grains of rock and soot that block light, thickest along the inner edge of each arm and in the middle of the disc.' },
+    { color: hex(MASER_COLOR), ring: true, name: 'Masers', about: 'Real, not drawn to match: the measured masers at their distances. The faint line through each spans its distance\'s uncertainty, along our line of sight (cut at twice the distance when the far end is open).' },
 ];
+
+// A key swatch: a dot, or a ring for the masers' markers
+export function KeySwatch({ k }) {
+    const style = k.ring
+        ? { background: 'transparent', border: `2px solid ${k.color}` }
+        : { background: k.color, border: k.name === 'Dust' ? '1px solid #64748b' : undefined };
+    return <span className="universe-3d-swatch" style={style} />;
+}
 
 const fmt = (n) => Math.round(n).toLocaleString();
 const listing = (names) => names.join(', ');
@@ -35,12 +44,12 @@ function Facts({ rows }) {
     );
 }
 
-// Measured stars on an arm (or at the centre), with their distance
+// Well-known masers on an arm (or at the centre), with their distance
 function Objects({ objects }) {
     if (!objects?.length) return null;
     return (
         <div className="region-part">
-            <div className="region-part-head static"><strong>Measured here</strong></div>
+            <div className="region-part-head static"><strong>Well-known masers here</strong></div>
             <ul className="region-members">
                 {objects.map(o => (
                     <li key={o.name} className="galaxy-object">
@@ -101,13 +110,14 @@ function MilkyWay({ card }) {
                 <div className="region-part-head static"><strong>What the colours mean</strong></div>
                 {GALAXY_KEY.map(k => (
                     <div key={k.name} className="galaxy-key-row">
-                        <span
-                            className="universe-3d-swatch"
-                            style={{ background: k.color, border: k.name === 'Dust' ? '1px solid #64748b' : undefined }}
-                        />
+                        <KeySwatch k={k} />
                         <div><strong>{k.name}</strong> <span className="star-info-muted">{k.about}</span></div>
                     </div>
                 ))}
+            </div>
+            <div className="region-part">
+                <div className="region-part-head static"><strong>What is a maser?</strong></div>
+                <p className="star-info-muted region-part-about">{card.maser}</p>
             </div>
             <div className="region-part">
                 <div className="region-part-head static"><strong>How we know</strong></div>
@@ -118,7 +128,7 @@ function MilkyWay({ card }) {
                     </div>
                 ))}
             </div>
-            <Sources refs={[card.orbit_speed_ref, ...card.facts.map(f => f.ref), ...card.history.map(h => h.ref)]} />
+            <Sources refs={[card.orbit_speed_ref, ...card.facts.map(f => f.ref), card.maser_ref, ...card.history.map(h => h.ref)]} />
         </>
     );
 }
@@ -142,7 +152,7 @@ function Centre({ card, bar }) {
     );
 }
 
-function Arm({ id, card }) {
+function Arm({ id, card, maserShort }) {
     // The Sun is inside an arm when it is within the arm's width of its middle
     const inside = card.nearest < card.width / 2;
     // Per measured segment (Norma and Outer for the Norma–Outer arm), the
@@ -162,12 +172,13 @@ function Arm({ id, card }) {
                 ['From the centre', `${fmt(card.r_range[0])} to ${fmt(card.r_range[1])} ly`],
                 ['Width', `about ${fmt(card.width)} ly near the Sun`],
                 ['Winds out at', <>{pitch} <span className="star-info-muted">· angle to a circle round the centre</span></>],
-                ['Measured', `${card.measured} young massive stars with parallaxes`],
+                ['Measured', <>{card.measured} maser sources (mostly newborn massive stars), with parallaxes
+                    <div className="star-info-muted">{maserShort}</div></>],
                 ['In the sky', <>{listing(card.constellations)} <span className="star-info-muted">· where it lies within ~20,000 ly</span></>],
             ]} />
             <Objects objects={card.objects} />
             <Sources refs={[card.ref, 'Reid et al. 2019, ApJ 885, 131 (Tables 1 and 2, arm tracks and widths)']} />
-            <p className="star-info-muted">The dots are scattered to match the measured arm, not real stars.</p>
+            <p className="star-info-muted">The dots are scattered to match the measured arm, not real stars; the rings are the real masers.</p>
         </>
     );
 }
@@ -181,7 +192,7 @@ function GalaxyInfoCard({ id, cards, onSelect, onView, onClose }) {
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             {id === 'milky_way' && <MilkyWay card={cards.milky_way} />}
             {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} />}
-            {arm && <Arm id={id} card={arm} />}
+            {arm && <Arm id={id} card={arm} maserShort={cards.milky_way.maser_short} />}
             <button className="button-primary star-info-fly" onClick={onView}>
                 {id === 'milky_way' ? 'View the whole galaxy' : 'Fly there'}
             </button>

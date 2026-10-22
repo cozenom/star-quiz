@@ -29,7 +29,7 @@ import {
     starRecord,
 } from '../utils/universe3d';
 import { RING_FEATURES, RING_FEATURES_BY_ID, ringLabelKm, ringPole, ringScaleKm, ringSubtitle } from '../utils/rings';
-import GalaxyInfoCard, { GALAXY_KEY } from './GalaxyInfoCard';
+import GalaxyInfoCard, { GALAXY_KEY, KeySwatch } from './GalaxyInfoCard';
 import PlanetInfoCard from './PlanetInfoCard';
 import RegionInfoCard from './RegionInfoCard';
 import RingInfoCard from './RingInfoCard';
@@ -323,6 +323,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showOort, setShowOort] = useState(true);
     // The Milky Way model (star layer), seen once you fly out past the stars
     const [showGalaxy, setShowGalaxy] = useState(true);
+    // Its real measured masers (rings), with the model
+    const [showMasers, setShowMasers] = useState(true);
     // Its card ('milky_way', 'centre' or an arm name) and the cards' content
     // (galaxy.json, fetched when first needed: flying out, a card or search)
     const [selectedGalaxy, setSelectedGalaxy] = useState(null);
@@ -395,7 +397,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy };
+    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -813,11 +815,21 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             return cloud.pick(solarCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
         };
 
+        // A measured maser of the galaxy model under the point, or null
+        const pickMaser = (clientX, clientY, radiusPx) => {
+            const rect = renderer.domElement.getBoundingClientRect();
+            syncLayerCamera(starLayer, camera);
+            return galaxy.pickMaser(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
+        };
+
         // Planets win over stars: they're drawn on top. Cloud dots come
         // between, for hovering (withCloud): they have no card to open.
+        // The galaxy's masers come next after planets (drawn over its stars).
         const pickAny = (clientX, clientY, radiusPx, withCloud = false) => {
             const id = pickBody(clientX, clientY, radiusPx);
             if (id !== null) return { type: 'body', id };
+            const maser = pickMaser(clientX, clientY, Math.min(radiusPx, 10));
+            if (maser !== null) return { type: 'maser', index: maser };
             const dot = withCloud ? pickCloudDot(clientX, clientY, Math.min(radiusPx, 8)) : null;
             if (dot) return { type: 'cloud', ...dot };
             const index = pickStar(clientX, clientY, radiusPx);
@@ -854,7 +866,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         };
 
         const showHover = (hit) => {
-            placeRing(hoverRing, hit?.type === 'star' ? positions.subarray(hit.index * 3, hit.index * 3 + 3) : null);
+            placeRing(hoverRing, hit?.type === 'star' ? positions.subarray(hit.index * 3, hit.index * 3 + 3)
+                : hit?.type === 'maser' ? galaxy.maser(hit.index).position : null);
             placeRing(bodyHoverRing, hit?.type === 'body' ? solar.byId.get(hit.id).position.toArray()
                 : hit?.type === 'cloud' ? hit.position : null);
             if (hit?.type === 'cloud') {
@@ -902,7 +915,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             if (moved > 5) return;
             // Ring features, the Oort cloud and the galaxy are picked by their labels
             const hit = ringId || labelRegion || labelGalaxy ? null : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
-            setSelectedGalaxy(labelGalaxy);
+            // A maser opens its arm's card (the Milky Way's if it's on none)
+            setSelectedGalaxy(labelGalaxy ?? (hit?.type === 'maser' ? galaxy.maser(hit.index).card ?? 'milky_way' : null));
+            if (hit?.type === 'maser') loadGalaxyData().catch(() => {});
             setSelectedStar(hit?.type === 'star' ? hit.index : null);
             setSelectedBody(hit?.type === 'body' ? hit.id : null);
             setSelectedRing(ringId);
@@ -923,6 +938,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 } else {
                     tooltip.textContent = hit.type === 'star' ? starLabel(hit.index)
                         : hit.type === 'cloud' ? dotLabel(hit)
+                        : hit.type === 'maser' ? galaxy.maser(hit.index).label
                         : solar.byId.get(hit.id).name;
                     tooltip.style.display = 'block';
                     tooltip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 10}px)`;
@@ -1304,6 +1320,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             oort.setVisible(optionsRef.current.showOort);
             oort.update(camera.position.length());
             galaxy.setVisible(optionsRef.current.showGalaxy);
+            galaxy.setMasersVisible(optionsRef.current.showMasers);
+            // An open galaxy card's masers stand out
+            galaxy.highlightMasers(optionsRef.current.selectedGalaxy === 'milky_way' ? null : optionsRef.current.selectedGalaxy);
             galaxy.update(camera.position, mount.clientHeight, camera.fov);
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
             [stars, gaiaStars].forEach(obj => { if (obj) obj.material.uniforms.uMinAlpha.value = minAlpha; });
@@ -1738,7 +1757,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         subtitle = (
             <span className="universe-3d-key">
                 {GALAXY_KEY.map(k => (
-                    <span key={k.name}><span className="universe-3d-swatch" style={{ background: k.color }} />{k.name}</span>
+                    <span key={k.name}><KeySwatch k={k} />{k.name}</span>
                 ))}
             </span>
         );
@@ -1927,6 +1946,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         ?
                     </button>
                 </div>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                    title="The 199 masers whose parallaxes trace the arms (Reid et al. 2019), at their measured distances: real, not part of the drawing"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showMasers}
+                        disabled={!showGalaxy}
+                        onChange={(e) => setShowMasers(e.target.checked)}
+                    />
+                    <span className="universe-3d-swatch" style={{ background: 'transparent', border: '2px solid #5eead4' }} />
+                    Masers (measured)
+                </label>
                 <label className="universe-3d-checkbox">
                     <input
                         type="checkbox"
