@@ -124,9 +124,9 @@ export function buildOortCloud(scene, pixelRatio) {
     };
 }
 
-// Where its label goes (ly, scene frame): above the outer cloud's edge,
-// towards ecliptic north
+// Where its label goes (ly, scene frame): above the Hills cloud's edge,
+// towards ecliptic north. Most of the points (~80%) are inside it.
 export const OORT_LABEL_POSITION = (() => {
-    const r = OUTER_AU * 0.8 / AU_PER_LY;
+    const r = HILLS_EDGE_AU / AU_PER_LY;
     return [0, Math.cos(OBLIQUITY) * r, Math.sin(OBLIQUITY) * r];
 })();
