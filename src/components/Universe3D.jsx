@@ -9,6 +9,7 @@ import { createStarDisc, radiusToLy } from '../utils/starDisc';
 import { buildSolarSystem, ECLIPTIC_NORTH, minViewRadii } from '../utils/solarSystem3d';
 import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '../utils/smallBodies3d';
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
+import { buildGalaxy } from '../utils/galaxy3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -318,6 +319,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [moreTier, setMoreTier] = useState('idle');
     // The Oort cloud model (star layer), shown with the asteroids
     const [showOort, setShowOort] = useState(true);
+    // The Milky Way model (star layer), seen once you fly out past the stars
+    const [showGalaxy, setShowGalaxy] = useState(true);
     // At most one of these is set: a star index, a solar system body id, or
     // a ring feature id (utils/rings.js)
     const [selectedStar, setSelectedStar] = useState(null);
@@ -364,7 +367,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, selectedAbbrev, selectedHips, selectedRing };
+    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, selectedAbbrev, selectedHips, selectedRing };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -484,7 +487,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         controls.rotateSpeed = 0.5;
         controls.zoomSpeed = ZOOM_SPEED;
         controls.minDistance = ORBIT_MIN_DISTANCE;
-        controls.maxDistance = 50000;
+        // Far enough to see the whole Milky Way model (~100,000 ly across)
+        controls.maxDistance = 300000;
         // Start orbiting Earth (the home view). Without planets: at the Sun,
         // looking at the sky 500 ly out.
         const home = bodyPose('Earth');
@@ -510,6 +514,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
         const oort = buildOortCloud(scene, pixelRatio);
+        // The Milky Way: a model from published numbers (see utils/galaxy3d),
+        // fetched and built the first time the camera heads out. Fewer
+        // points on phones.
+        const galaxy = buildGalaxy(scene, pixelRatio, () => fetch(`${import.meta.env.BASE_URL}data/galaxy.json`)
+            .then(response => {
+                if (!response.ok) throw new Error(response.statusText);
+                return response.json();
+            }), { lite: window.matchMedia('(pointer: coarse)').matches });
 
         const sun = makeStarPoints(
             new Float32Array([0, 0, 0]),
@@ -954,6 +966,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             el: makeLabelEl('Oort cloud (model)', 'universe-3d-label universe-3d-label-constellation'),
             shown: false,
         };
+        let galaxyLabels = [];
         const placedLabels = [];
 
         const projected = new THREE.Vector3();
@@ -1051,6 +1064,18 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 setLabel(label, wanted ? toScreen(label.position, width, height) : null, 0, 0);
             }
             setLabel(oortLabel, opts.showLabels && oort.fade() > 0.3 ? toScreen(oortLabel.position, width, height) : null, 0, 0);
+            // The galaxy's labels appear once it is built
+            if (!galaxyLabels.length) {
+                galaxyLabels = galaxy.labels().map(l => ({
+                    position: l.position,
+                    el: makeLabelEl(l.name, 'universe-3d-label universe-3d-label-constellation'),
+                    shown: false,
+                }));
+            }
+            const galaxyLabelsOn = opts.showLabels && galaxy.fade() > 0.3;
+            for (const label of galaxyLabels) {
+                setLabel(label, galaxyLabelsOn ? toScreen(label.position, width, height) : null, 0, 0);
+            }
             // Earth is labelled from anywhere, with a ring, so you can always
             // find home, and other labels never hide it (next to the Sun's,
             // its label goes underneath). The Sun is labelled like the planets.
@@ -1229,6 +1254,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             cloud?.setCameraDistance(camera.position.length() * AU_PER_LY);
             oort.setVisible(optionsRef.current.showOort);
             oort.update(camera.position.length());
+            galaxy.setVisible(optionsRef.current.showGalaxy);
+            galaxy.update(camera.position, mount.clientHeight, camera.fov);
             if (solar) solarLayer.near = solarNearPlane();
             starDisc.update(camera, mount.clientHeight);
             syncCameras();
@@ -1269,6 +1296,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             solar?.dispose();
             cloud?.dispose();
             oort.dispose();
+            galaxy.dispose();
             starDisc.dispose();
             bloomPass.dispose();
             composer.dispose();
@@ -1808,6 +1836,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         )}
                     </>
                 )}
+                <label
+                    className="universe-3d-checkbox"
+                    title="Fly out past the stars to see it: the bar, arms and dust drawn from published measurements (Reid et al. 2019 and others)"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showGalaxy}
+                        onChange={(e) => setShowGalaxy(e.target.checked)}
+                    />
+                    Milky Way (model)
+                </label>
                 <label className="universe-3d-checkbox">
                     <input
                         type="checkbox"

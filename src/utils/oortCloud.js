@@ -30,7 +30,7 @@ const ALPHA = 0.35;
 const OBLIQUITY = 23.4392911 * Math.PI / 180;
 
 // Deterministic random numbers (mulberry32)
-function random(seed) {
+export function random(seed) {
     let a = seed;
     return () => {
         a = (a + 0x6d2b79f5) | 0;
