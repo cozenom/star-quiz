@@ -9,7 +9,7 @@ import { createStarDisc, radiusToLy } from '../utils/starDisc';
 import { buildSolarSystem, ECLIPTIC_NORTH, minViewRadii } from '../utils/solarSystem3d';
 import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '../utils/smallBodies3d';
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
-import { buildGalaxy } from '../utils/galaxy3d';
+import { ARM_LABELS, GALAXY_SEARCH, buildGalaxy, galaxyPose } from '../utils/galaxy3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -24,10 +24,12 @@ import {
     constellationFocus,
     constellationLinePositions,
     formatBayer,
+    normalizeSearchText,
     scaleBarDistance,
     starRecord,
 } from '../utils/universe3d';
 import { RING_FEATURES, RING_FEATURES_BY_ID, ringLabelKm, ringPole, ringScaleKm, ringSubtitle } from '../utils/rings';
+import GalaxyInfoCard, { GALAXY_KEY } from './GalaxyInfoCard';
 import PlanetInfoCard from './PlanetInfoCard';
 import RegionInfoCard from './RegionInfoCard';
 import RingInfoCard from './RingInfoCard';
@@ -321,6 +323,29 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showOort, setShowOort] = useState(true);
     // The Milky Way model (star layer), seen once you fly out past the stars
     const [showGalaxy, setShowGalaxy] = useState(true);
+    // Its card ('milky_way', 'centre' or an arm name) and the cards' content
+    // (galaxy.json, fetched when first needed: flying out, a card or search)
+    const [selectedGalaxy, setSelectedGalaxy] = useState(null);
+    const [galaxyCards, setGalaxyCards] = useState(null);
+    const galaxyDataRef = useRef(null);
+    const loadGalaxyData = () => {
+        if (!galaxyDataRef.current) {
+            galaxyDataRef.current = fetch(`${import.meta.env.BASE_URL}data/galaxy.json`)
+                .then(response => {
+                    if (!response.ok) throw new Error(response.statusText);
+                    return response.json();
+                })
+                .then(data => {
+                    setGalaxyCards(data.cards);
+                    return data;
+                })
+                .catch(error => {
+                    galaxyDataRef.current = null;  // try again next time
+                    throw error;
+                });
+        }
+        return galaxyDataRef.current;
+    };
     // At most one of these is set: a star index, a solar system body id, or
     // a ring feature id (utils/rings.js)
     const [selectedStar, setSelectedStar] = useState(null);
@@ -358,7 +383,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const gaiaBuffers = useMemo(() => (stars3d?.gaia ? buildGaiaBuffers(stars3d.gaia) : null), [stars3d]);
     const lineStarInfo = useMemo(() => buildLineStarInfo(constellationData), [constellationData]);
     const searchItems = useMemo(
-        () => (starBuffers ? buildSearchIndex(constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies?.meta) : []),
+        () => (starBuffers ? [
+            ...buildSearchIndex(constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies?.meta),
+            ...GALAXY_SEARCH.map(g => ({ ...g, type: 'galaxy', terms: [g.label, ...g.terms].map(normalizeSearchText), sortKey: -11 })),
+        ] : []),
         [constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies]
     );
 
@@ -367,18 +395,20 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, selectedAbbrev, selectedHips, selectedRing, selectedRegion };
+    optionsRef.current = { showLines, showAllLines, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy };
 
     const selectStar = (index) => {
         setSelectedBody(null);
         setSelectedRing(null);
         setSelectedRegion(null);
+        setSelectedGalaxy(null);
         setSelectedStar(index);
     };
     const selectBody = (id) => {
         setSelectedStar(null);
         setSelectedRing(null);
         setSelectedRegion(null);
+        setSelectedGalaxy(null);
         setSelectedBody(id);
     };
 
@@ -517,11 +547,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // The Milky Way: a model from published numbers (see utils/galaxy3d),
         // fetched and built the first time the camera heads out. Fewer
         // points on phones.
-        const galaxy = buildGalaxy(scene, pixelRatio, () => fetch(`${import.meta.env.BASE_URL}data/galaxy.json`)
-            .then(response => {
-                if (!response.ok) throw new Error(response.statusText);
-                return response.json();
-            }), { lite: window.matchMedia('(pointer: coarse)').matches });
+        const galaxy = buildGalaxy(scene, pixelRatio, loadGalaxyData, { lite: window.matchMedia('(pointer: coarse)').matches });
 
         const sun = makeStarPoints(
             new Float32Array([0, 0, 0]),
@@ -856,6 +882,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let downAt = null;
         let pressedRing = null;  // ring feature id when the press began on its label
         let pressedRegion = null;  // likewise a region's (the Oort cloud's)
+        let pressedGalaxy = null;  // and the galaxy's (its centre or an arm)
         const onPointerDown = (e) => {
             downAt = { x: e.clientX, y: e.clientY };
             // Hide the hover state while dragging; it is stale once the view moves
@@ -865,14 +892,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const onPointerUp = (e) => {
             const ringId = pressedRing;
             const labelRegion = pressedRegion;
+            const labelGalaxy = pressedGalaxy;
             pressedRing = null;
             pressedRegion = null;
+            pressedGalaxy = null;
             if (!downAt || e.button !== 0) return;
             const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
             downAt = null;
             if (moved > 5) return;
-            // Ring features and the Oort cloud are picked by their labels
-            const hit = ringId || labelRegion ? null : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
+            // Ring features, the Oort cloud and the galaxy are picked by their labels
+            const hit = ringId || labelRegion || labelGalaxy ? null : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
+            setSelectedGalaxy(labelGalaxy);
             setSelectedStar(hit?.type === 'star' ? hit.index : null);
             setSelectedBody(hit?.type === 'body' ? hit.id : null);
             setSelectedRing(ringId);
@@ -1080,15 +1110,20 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             }
             // The galaxy's labels appear once it is built
             if (!galaxyLabels.length) {
-                galaxyLabels = galaxy.labels().map(l => ({
-                    position: l.position,
-                    el: makeLabelEl(l.name, 'universe-3d-label universe-3d-label-constellation'),
-                    shown: false,
-                }));
+                galaxyLabels = galaxy.labels().map(l => {
+                    const el = makeLabelEl(l.name, 'universe-3d-label universe-3d-label-constellation universe-3d-label-link');
+                    makeClickable(el, () => { pressedGalaxy = l.id; });
+                    return { id: l.id, position: l.position, el, shown: false, selected: false };
+                });
             }
             const galaxyLabelsOn = opts.showLabels && galaxy.fade() > 0.3;
             for (const label of galaxyLabels) {
                 setLabel(label, galaxyLabelsOn ? toScreen(label.position, width, height) : null, 0, 0);
+                const selected = opts.selectedGalaxy === label.id;
+                if (selected !== label.selected) {
+                    label.el.classList.toggle('selected', selected);
+                    label.selected = selected;
+                }
             }
             // Earth is labelled from anywhere, with a ring, so you can always
             // find home, and other labels never hide it (next to the Sun's,
@@ -1411,8 +1446,32 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     };
 
     // Stars, planets and moons: fly straight in, as their cards' buttons do
+    // Fly to the galaxy, its centre or an arm, and open its card
+    const viewGalaxy = (id) => {
+        const s = sceneRef.current;
+        if (!s) return;
+        setShowGalaxy(true);
+        selectStar(null);
+        setSelectedGalaxy(id);
+        setFocus({ type: 'galaxy', id });
+        loadGalaxyData().then((data) => {
+            const pose = galaxyPose(data, id);
+            if (!pose || sceneRef.current !== s) return;
+            s.setFollow(null);
+            s.flyTo(pose.position, pose.target, pose.minDistance);
+        }).catch(error => console.error('Error loading the galaxy model:', error));
+    };
+    // Open a galaxy card without moving (its data may still be on its way)
+    const openGalaxyCard = (id) => {
+        selectStar(null);
+        setSelectedGalaxy(id);
+        loadGalaxyData().catch(error => console.error('Error loading the galaxy model:', error));
+    };
+
     const handleSearchSelect = (item) => {
-        if (item.type === 'region') {
+        if (item.type === 'galaxy') {
+            viewGalaxy(item.id);
+        } else if (item.type === 'region') {
             viewRegion(item.id);
         } else if (item.type === 'constellation') {
             setSelectedAbbrev(item.abbrev);
@@ -1674,6 +1733,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 </span>
             )
             : 'Asteroids & comets';
+    } else if (focus.type === 'galaxy') {
+        title = focus.id === 'milky_way' ? 'Milky Way' : focus.id === 'centre' ? 'Galactic Centre' : ARM_LABELS[focus.id];
+        // Key to the model's colours
+        subtitle = (
+            <span className="universe-3d-key">
+                {GALAXY_KEY.map(k => (
+                    <span key={k.name}><span className="universe-3d-swatch" style={{ background: k.color }} />{k.name}</span>
+                ))}
+            </span>
+        );
     } else if (focus.type === 'ring') {
         const f = RING_FEATURES_BY_ID.get(focus.id);
         title = f.name;
@@ -1686,7 +1755,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     }
 
     return (
-        <div className={`universe-3d-screen ${star || body || ring || selectedRegion ? 'has-card' : ''}`}>
+        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) ? 'has-card' : ''}`}>
             <div className="universe-3d-canvas" ref={mountRef} />
             <div className="universe-3d-labels" ref={labelsRef} />
             <div className="universe-3d-tooltip" ref={tooltipRef} />
@@ -1850,17 +1919,27 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         )}
                     </>
                 )}
-                <label
-                    className="universe-3d-checkbox"
-                    title="Fly out past the stars to see it: the bar, arms and dust drawn from published measurements (Reid et al. 2019 and others)"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showGalaxy}
-                        onChange={(e) => setShowGalaxy(e.target.checked)}
-                    />
-                    Milky Way (model)
-                </label>
+                <div className="universe-3d-option-row">
+                    <label
+                        className="universe-3d-checkbox"
+                        title="Fly out past the stars to see it: the bar, arms and dust drawn from published measurements (Reid et al. 2019 and others)"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showGalaxy}
+                            onChange={(e) => setShowGalaxy(e.target.checked)}
+                        />
+                        Milky Way (model)
+                    </label>
+                    <button
+                        className="universe-3d-info-button"
+                        onClick={() => openGalaxyCard('milky_way')}
+                        title="About the Milky Way and what the model's colours mean"
+                        aria-label="About the Milky Way model"
+                    >
+                        ?
+                    </button>
+                </div>
                 <label className="universe-3d-checkbox">
                     <input
                         type="checkbox"
@@ -1918,6 +1997,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         flyToBody(id);
                     }}
                     onClose={() => setSelectedRegion(null)}
+                />
+            )}
+            {selectedGalaxy && galaxyCards && (
+                <GalaxyInfoCard
+                    id={selectedGalaxy}
+                    cards={galaxyCards}
+                    onSelect={openGalaxyCard}
+                    onView={() => viewGalaxy(selectedGalaxy)}
+                    onClose={() => setSelectedGalaxy(null)}
                 />
             )}
             {ring && (

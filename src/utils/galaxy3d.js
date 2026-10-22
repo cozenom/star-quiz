@@ -61,8 +61,8 @@ const DUST_OFFSET = 0.7;
 const DUST_SPREAD = 0.8;
 const DUST_ARM_SIZE_KPC = 0.28;
 const DUST_DISC_SIZE_KPC = 0.45;
-// Colours (raw hex) and brightness per point
-const COLORS = {
+// Colours (raw hex) and brightness per point (also the cards' colour key)
+export const GALAXY_COLORS = {
     thin: [0xffe7c4, 0.1], thick: [0xffd9a8, 0.06], bulge: [0xffd08a, 0.06], bar: [0xffd49a, 0.05],
     arms: [0xbcd2ff, 0.05], clumps: [0xd4e2ff, 0.07], hii: [0xff6f9c, 0.18],
 };
@@ -183,8 +183,8 @@ function scatter(data, lite) {
     // their points; there are just fewer knots)
     const boost = lite ? 1 / LITE_FACTOR : 1;
     const addStar = (x, y, z, kind, sizeKind) => {
-        const hex = COLORS[kind][0];
-        const bright = COLORS[kind][1] * (kind === 'hii' ? 1 : boost);
+        const hex = GALAXY_COLORS[kind][0];
+        const bright = GALAXY_COLORS[kind][1] * (kind === 'hii' ? 1 : boost);
         color.setHex(hex, THREE.LinearSRGBColorSpace);
         stars.pos.push(x, y, z);
         stars.col.push(color.r * bright, color.g * bright, color.b * bright);
@@ -323,17 +323,58 @@ function sceneMatrix(toScene) {
     );
 }
 
-const ARM_LABELS = {
+// The arms with cards (galaxy.json cards.arms), by name, with what they're called
+export const ARM_LABELS = {
     'Norma-Outer': 'Norma–Outer Arm',
     'Scutum-Centaurus-OSC': 'Scutum–Centaurus Arm',
     'Sagittarius-Carina': 'Sagittarius–Carina Arm',
     'Perseus': 'Perseus Arm',
     'Local': 'Local (Orion) Arm',
 };
+export const CENTRE_LABEL = 'Galactic Centre (Sgr A*)';
+
+// Search entries: id is 'milky_way', 'centre' or an arm name
+export const GALAXY_SEARCH = [
+    { id: 'milky_way', label: 'Milky Way', sublabel: 'Our galaxy (model)', terms: ['galaxy', 'our galaxy', 'the galaxy'] },
+    { id: 'centre', label: 'Galactic Centre', sublabel: 'Sagittarius A*, a supermassive black hole',
+        terms: ['galactic center', 'sgr a*', 'sgr a', 'sagittarius a*', 'sagittarius a', 'black hole', 'centre of the galaxy'] },
+    { id: 'Local', label: ARM_LABELS.Local, sublabel: 'The Sun\'s arm', terms: ['orion arm', 'orion spur', 'local arm', 'orion-cygnus arm'] },
+    { id: 'Perseus', label: ARM_LABELS.Perseus, sublabel: 'Spiral arm', terms: ['perseus arm'] },
+    { id: 'Sagittarius-Carina', label: ARM_LABELS['Sagittarius-Carina'], sublabel: 'Spiral arm', terms: ['sagittarius arm', 'carina arm'] },
+    { id: 'Scutum-Centaurus-OSC', label: ARM_LABELS['Scutum-Centaurus-OSC'], sublabel: 'Spiral arm',
+        terms: ['scutum arm', 'centaurus arm', 'scutum-crux arm', 'outer scutum-centaurus arm', 'osc arm'] },
+    { id: 'Norma-Outer', label: ARM_LABELS['Norma-Outer'], sublabel: 'Spiral arm', terms: ['norma arm', 'outer arm', 'cygnus arm'] },
+];
+
+// Camera views (ly from the Sun): the whole galaxy, its centre, or an arm,
+// seen from above the disc, tilted towards the Sun's side.
+// {position, target, minDistance} as arrays, or null
+const VIEWS = { milky_way: [140000, 35], centre: [30000, 40], arm: [45000, 30] };
+export function galaxyPose(data, id) {
+    const m = data.to_scene.matrix;
+    const col = (j) => new THREE.Vector3(m[0][j], m[1][j], m[2][j]).normalize();
+    const pole = col(2);
+    const gc = new THREE.Vector3(...data.to_scene.offset_ly);
+    const toLy = sceneMatrix(data.to_scene);
+    let target = gc;
+    let out = col(0).negate();  // from the centre towards the Sun
+    let view = VIEWS[id];
+    if (!view) {
+        const arm = data.arms.find(a => a.name === id);
+        if (!arm || arm.label < 0) return null;
+        target = new THREE.Vector3(arm.xy_kpc[2 * arm.label], arm.xy_kpc[2 * arm.label + 1], 0).applyMatrix4(toLy);
+        out = target.clone().sub(gc).projectOnPlane(pole).normalize();
+        view = VIEWS.arm;
+    }
+    const [distance, tiltDeg] = view;
+    const tilt = THREE.MathUtils.degToRad(tiltDeg);
+    const dir = pole.clone().multiplyScalar(Math.cos(tilt)).addScaledVector(out, Math.sin(tilt));
+    return { position: target.clone().addScaledVector(dir, distance).toArray(), target: target.toArray(), minDistance: 100 };
+}
 
 // load: () => Promise of galaxy.json (fetched on first need).
 // Returns update(cameraPosition ly, viewportHeightPx, fovDeg),
-// fade(), labels() [{name, position (ly)}], setVisible(on), dispose()
+// fade(), labels() [{id, name, position (ly)}], setVisible(on), dispose()
 export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
     const group = new THREE.Group();
     group.matrixAutoUpdate = false;
@@ -391,10 +432,10 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
         geometries.push(g, dg);
 
         const toLy = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(group.matrix);
-        labels = [{ name: 'Galactic Centre (Sgr A*)', position: toLy(0, 0, 0) }];
+        labels = [{ id: 'centre', name: CENTRE_LABEL, position: toLy(0, 0, 0) }];
         for (const arm of arms) {
             if (arm.label < 0 || !ARM_LABELS[arm.name]) continue;
-            labels.push({ name: ARM_LABELS[arm.name], position: toLy(arm.xy_kpc[2 * arm.label], arm.xy_kpc[2 * arm.label + 1], 0) });
+            labels.push({ id: arm.name, name: ARM_LABELS[arm.name], position: toLy(arm.xy_kpc[2 * arm.label], arm.xy_kpc[2 * arm.label + 1], 0) });
         }
         state = 'ready';
     };

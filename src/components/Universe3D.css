@@ -763,3 +763,61 @@ button.region-part-head:hover {
     margin: 0;
     padding: 0;
 }
+
+/* Milky Way cards (GalaxyInfoCard): colour key, history, measured objects */
+.galaxy-key-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin: 0.35rem 0 0 0.3rem;
+    font-size: 0.82rem;
+}
+
+.galaxy-key-row .universe-3d-swatch {
+    flex: none;
+    width: 0.7rem;
+    height: 0.7rem;
+}
+
+.galaxy-year {
+    flex: none;
+    width: 2.4rem;
+    color: #cbd5e1;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.galaxy-object {
+    padding: 0.15rem 0.3rem;
+    font-size: 0.82rem;
+}
+
+.galaxy-object-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.galaxy-object-head > span:last-child {
+    white-space: nowrap;
+}
+
+/* The "?" next to an option that opens its card */
+.universe-3d-option-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.universe-3d-info-button {
+    min-height: 0;
+    width: 1.4rem;
+    height: 1.4rem;
+    padding: 0;
+    font-size: 0.8rem;
+    line-height: 1;
+    border-radius: 50%;
+    background: rgba(71, 85, 105, 0.5);
+    color: #e2e8f0;
+}
