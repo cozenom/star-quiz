@@ -272,17 +272,16 @@ const skyFragmentShader = /* glsl */ `
     uniform samplerCube uCube;
     uniform float uFade;
     uniform float uBrightness;
-    uniform float uLinear;  // haze on: blend in linear light (see Universe3D)
     varying vec3 vDir;
     void main() {
         vec3 c = textureCube(uCube, normalize(vDir)).rgb * uFade * uBrightness;
-        gl_FragColor = vec4(mix(c, pow(c, vec3(2.2)), uLinear), 1.0);
+        gl_FragColor = vec4(pow(c, vec3(2.2)), 1.0);  // display value -> linear (see Universe3D)
     }
 `;
 
 // scene: the sky layer's scene (a layer whose origin is the camera).
 // Returns update(cameraPositionLy) (re-renders the cube when needed),
-// fade(), setVisible(on), setHaze(on), dispose()
+// fade(), setVisible(on), dispose()
 export function buildMilkyWayBand(renderer, scene, data, { lite = false } = {}) {
     const toScene = sceneMatrix(data.to_scene);           // kpc -> ly
     const fromScene = toScene.clone().invert();           // ly -> kpc
@@ -311,7 +310,7 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false } = {}) 
     const cubeCamera = new THREE.CubeCamera(0.1, 100, target);
 
     const skyMaterial = new THREE.ShaderMaterial({
-        uniforms: { uCube: { value: target.texture }, uFade: { value: 0 }, uBrightness: { value: DISPLAY_BRIGHTNESS }, uLinear: { value: 0 } },
+        uniforms: { uCube: { value: target.texture }, uFade: { value: 0 }, uBrightness: { value: DISPLAY_BRIGHTNESS } },
         vertexShader: skyVertexShader,
         fragmentShader: skyFragmentShader,
         side: THREE.BackSide,
@@ -344,7 +343,6 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false } = {}) 
         },
         fade: () => fade,
         setVisible: (on) => { wanted = on; },
-        setHaze: (on) => { skyMaterial.uniforms.uLinear.value = on ? 1 : 0; },
         dispose: () => {
             scene.remove(sky);
             sphereGeometry.dispose();

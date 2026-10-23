@@ -30,9 +30,11 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { moonMeanAnomaly, moonMeanOrbit, moonOrbitLoop, moonPeriodDays, moonPosition, moonPositionSource } from './moons.js';
+import { apparentMagnitude, MAGNITUDE_BODIES } from './planetMagnitudes.js';
 import { RING_SYSTEMS } from './rings.js';
 import { bodyAxes, heliocentricPosition, moonOrbitPath, orbitPath, orbitPeriodDays, SOLAR_SYSTEM_BODIES } from './planets.js';
 import { smallBodyOrbit, smallBodyPeriodDays, smallBodyPosition, spinAxes } from './smallBodies.js';
+import { SPRITE_FRAGMENT_GLSL, SPRITE_MAX_SIZE_PX, SPRITE_VERTEX_GLSL, STAR_MIN_ALPHA } from './starSprite.js';
 import { KM_PER_AU, raDecToXYZ } from './universe3d.js';
 
 // Whole layer fades out between these camera distances from the Sun (AU)
@@ -40,6 +42,12 @@ const FADE_START_AU = 300;
 const FADE_END_AU = 5000;
 
 const DOT_SIZE_PX = 6;
+// Planets and our Moon are drawn as points no brighter than this: Venus at
+// its brightest in our sky (-4.9). The star sprite shows brightness by
+// size, made for points; a planet close enough to be brighter is nearly a
+// disc on screen, and its sprite would dwarf it (the Moon from a million km
+// is ~-11, Earth ~-15: huge glowing balls round discs a few px across).
+const BRIGHTEST_POINT_MAG = -5;
 // A body's texture starts loading once it is drawn this many px in radius
 // (a little before its sphere outgrows its dot, so it's there when visible)
 const TEXTURE_LOAD_PX = 2;
@@ -193,42 +201,82 @@ const separationGlsl = `
     }
 `;
 
-// Fixed-size dot at the object's origin; fades as the sphere outgrows it.
+// A body's dot, at the object's origin, fades as the sphere outgrows it.
 // Moons also fade in only once clear of their planet (uParentOffset is the
 // planet's position relative to the moon, AU).
-const dotVertexShader = `
+const dotFadeGlsl = `
     uniform float uSize;
     uniform float uRadius;
     uniform float uViewportHeight;
     uniform float uFade;
     uniform float uHasParent;
     uniform vec3 uParentOffset;
-    varying float vAlpha;
     ${separationGlsl}
+
+    float dotFade(vec4 mvPosition) {
+        float radiusPx = uRadius / max(-mvPosition.z, 1e-30) * projectionMatrix[1][1] * uViewportHeight * 0.5;
+        float fade = uFade * (1.0 - smoothstep(uSize * 0.25, uSize * 0.5, radiusPx));
+        if (uHasParent > 0.5) {
+            vec4 parent = modelViewMatrix * vec4(uParentOffset, 1.0);
+            fade *= smoothstep(${MOON_SEPARATION_PX[0].toFixed(1)}, ${MOON_SEPARATION_PX[1].toFixed(1)}, separationPx(mvPosition, parent));
+        }
+        return fade;
+    }
+`;
+
+// Fixed-size dot
+const dotVertexShader = `
+    varying float vAlpha;
+    ${dotFadeGlsl}
 
     void main() {
         vec4 mvPosition = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-        float radiusPx = uRadius / max(-mvPosition.z, 1e-30) * projectionMatrix[1][1] * uViewportHeight * 0.5;
-        vAlpha = uFade * (1.0 - smoothstep(uSize * 0.25, uSize * 0.5, radiusPx));
-        if (uHasParent > 0.5) {
-            vec4 parent = modelViewMatrix * vec4(uParentOffset, 1.0);
-            vAlpha *= smoothstep(${MOON_SEPARATION_PX[0].toFixed(1)}, ${MOON_SEPARATION_PX[1].toFixed(1)}, separationPx(mvPosition, parent));
-        }
+        vAlpha = dotFade(mvPosition);
         gl_PointSize = vAlpha > 0.0 ? uSize : 0.0;
         gl_Position = projectionMatrix * mvPosition;
     }
 `;
 
+// Bodies with a known brightness (planets, Pluto, our Moon: see
+// planetMagnitudes) are points of light by their apparent magnitude from
+// the camera (uMag, see updateBrightness), drawn as the stars are (the star
+// sprite): Venus outshines Sirius, Neptune is a faint dot.
+const litDotVertexShader = `
+    uniform float uMag;
+    uniform vec3 uColor;
+    ${SPRITE_VERTEX_GLSL}
+    ${dotFadeGlsl}
+
+    void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        float fade = dotFade(mvPosition);
+        spriteFromMagnitude(uMag, uColor);
+        vAlpha *= fade;
+        vGlare *= fade;
+        if (fade <= 0.0) gl_PointSize = 0.0;
+        gl_Position = projectionMatrix * mvPosition;
+    }
+`;
+
+const litDotFragmentShader = `
+    ${SPRITE_FRAGMENT_GLSL}
+
+    void main() {
+        vec4 light = sprite();
+        if (light.a <= 0.0) discard;
+        gl_FragColor = light;
+    }
+`;
+
 const dotFragmentShader = `
     uniform vec3 uColor;
-    uniform float uLinear;
     varying float vAlpha;
 
     void main() {
         float r = length(gl_PointCoord - 0.5) * 2.0;
         float alpha = (1.0 - smoothstep(0.55, 1.0, r)) * vAlpha;
         if (alpha < 0.01) discard;
-        vec3 color = mix(uColor, pow(uColor, vec3(2.2)), uLinear);  // like the star shader
+        vec3 color = pow(uColor, vec3(2.2));  // sRGB tint -> linear, like the star shader
         gl_FragColor = vec4(color, alpha);
     }
 `;
@@ -254,18 +302,22 @@ const minorMoonVertexShader = `
 
 const colorUniform = (hex) => ({ value: new THREE.Color().setHex(hex, THREE.LinearSRGBColorSpace) });
 
+// dotFadeGlsl's uniforms
+const dotFadeUniforms = (radiusAu, pixelRatio, hasParent) => ({
+    uSize: { value: DOT_SIZE_PX * pixelRatio },
+    uRadius: { value: radiusAu },
+    uViewportHeight: { value: 1 },
+    uFade: { value: 1 },
+    uHasParent: { value: hasParent ? 1 : 0 },
+    uParentOffset: { value: new THREE.Vector3() },
+});
+
 function makeDot(color, radiusAu, pixelRatio, hasParent) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
     const material = new THREE.ShaderMaterial({
         uniforms: {
-            uSize: { value: DOT_SIZE_PX * pixelRatio },
-            uRadius: { value: radiusAu },
-            uViewportHeight: { value: 1 },
-            uFade: { value: 1 },
-            uLinear: { value: 0 },
-            uHasParent: { value: hasParent ? 1 : 0 },
-            uParentOffset: { value: new THREE.Vector3() },
+            ...dotFadeUniforms(radiusAu, pixelRatio, hasParent),
             // Raw hex values, like the star shader (no colour management)
             uColor: colorUniform(color),
         },
@@ -273,6 +325,36 @@ function makeDot(color, radiusAu, pixelRatio, hasParent) {
         fragmentShader: dotFragmentShader,
         transparent: true,
         depthWrite: false,
+    });
+    const dot = new THREE.Points(geometry, material);
+    dot.frustumCulled = false;
+    return dot;
+}
+
+// A body with a known brightness as a point of light (litDotVertexShader).
+// Its tint mixes toward white like the stars' (bvToColor), so it reads as
+// light, not paint.
+function makeLitDot(color, radiusAu, pixelRatio, hasParent) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+    const tint = colorUniform(color);
+    tint.value.lerp(new THREE.Color(1, 1, 1), 0.35);
+    const material = new THREE.ShaderMaterial({
+        uniforms: {
+            ...dotFadeUniforms(radiusAu, pixelRatio, hasParent),
+            uMag: { value: 0 },
+            uColor: tint,
+            uPixelRatio: { value: pixelRatio },
+            uMaxSize: { value: SPRITE_MAX_SIZE_PX },
+            uMinAlpha: { value: STAR_MIN_ALPHA },
+            uGlare: { value: 0 },
+            uGlareMag: { value: 0 },
+        },
+        vertexShader: litDotVertexShader,
+        fragmentShader: litDotFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
     });
     const dot = new THREE.Points(geometry, material);
     dot.frustumCulled = false;
@@ -288,7 +370,6 @@ function makeMinorMoonCloud(count, pixelRatio) {
             uViewportHeight: { value: 1 },
             uFade: { value: 1 },
             uCloudFade: { value: 0 },
-            uLinear: { value: 0 },
             uColor: colorUniform(new THREE.Color(DEFAULT_MOON_COLOR).getHex()),
         },
         vertexShader: minorMoonVertexShader,
@@ -567,7 +648,7 @@ function moonFacts(m) {
 //   updateTextures(cameraAu, heightPx, fovDeg) (call each frame: lazy loading),
 //   updateMinorMoonFade(cameraAu, heightPx, fovDeg), minorMoonFade(planetId),
 //   setShowMinorMoons(on), setRingWaveScale(scale), updateRingView(cameraAu)
-//   (each frame), setHaze(on),
+//   and updateBrightness(cameraAu) (each frame), setGlare(peak, mag),
 //   setViewportHeight(px), dispose()
 export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodies = null) {
     const factsById = new Map(facts.bodies.map(b => [b.id, b]));
@@ -784,7 +865,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         scene.add(anchor);
         const mesh = track(new THREE.Mesh(new THREE.SphereGeometry(radiusAu, 64, 32), material));
         anchor.add(mesh);
-        const dot = isSun ? null : track(makeDot(color, radiusAu, pixelRatio, parentId !== null));
+        const dot = isSun ? null : track((MAGNITUDE_BODIES.has(id) ? makeLitDot : makeDot)(color, radiusAu, pixelRatio, parentId !== null));
         if (dot) anchor.add(dot);
         if (isEarth) setupEarth(material, mesh, anchor, radiusAu, loads);
         if (id === 'Moon') setupMoon(material, surfaceMap, loads);
@@ -1093,7 +1174,6 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
             const dot = makeDot(body.color, body.radiusAu, pixelRatio, true);
             const u = dot.material.uniforms;
             u.uFade.value = fade;
-            u.uLinear.value = hazeOn ? 1 : 0;
             u.uViewportHeight.value = viewportPx;
             mesh.add(dot);
             scene.add(mesh);
@@ -1236,9 +1316,10 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         ...bodies.filter(b => b.dot).map(b => b.dot.material),
         ...[...clouds.values()].map(c => c.cloud.material),
     ];
+    // Points of light by their magnitude (makeLitDot)
+    const litBodies = bodies.filter(b => b.dot && MAGNITUDE_BODIES.has(b.id));
     let showMinorMoons = true;
     let fade = 1;
-    let hazeOn = false;
     let viewportPx = 1;
     function applyOrbitOpacity() {
         orbitGroup.visible = fade > 0;
@@ -1313,13 +1394,26 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
                 r.uniforms.uCameraLocal.value.subVectors(cameraAu, r.position).applyQuaternion(r.inverse);
             }
         },
+        // The planets', Pluto's and our Moon's apparent magnitude from the
+        // camera (AU, this layer), as drawn (BRIGHTEST_POINT_MAG). Call each
+        // frame.
+        updateBrightness: (cameraAu) => {
+            for (const body of litBodies) {
+                const mag = apparentMagnitude(body.id, body.position, cameraAu);
+                body.dot.material.uniforms.uMag.value = Math.max(mag, BRIGHTEST_POINT_MAG);
+            }
+        },
+        // Their glare spikes, as the stars' (see Universe3D's GLARE_MAG):
+        // peak 0 is off
+        setGlare: (peak, mag) => {
+            for (const body of litBodies) {
+                body.dot.material.uniforms.uGlare.value = peak;
+                body.dot.material.uniforms.uGlareMag.value = mag;
+            }
+        },
         // Draw the orbit of a selected minor moon (major ones always have one)
         setHighlightOrbit: (id) => {
             if (id !== highlightId) setHighlight(id);
-        },
-        setHaze: (on) => {
-            hazeOn = on;
-            dotMaterials.forEach(m => { m.uniforms.uLinear.value = on ? 1 : 0; });
         },
         setViewportHeight: (px) => {
             viewportPx = px;

@@ -50,20 +50,7 @@ export function syncLayerCamera(layer, master) {
     cam.updateMatrixWorld();
 }
 
-// Draw layers (ordered far -> near) straight to the screen
-export function renderLayers(renderer, layers) {
-    const autoClear = renderer.autoClear;
-    renderer.autoClear = false;
-    renderer.clear();
-    for (const layer of layers) {
-        if (!layer.visible) continue;
-        renderer.render(layer.scene, layer.camera);
-        renderer.clearDepth();
-    }
-    renderer.autoClear = autoClear;
-}
-
-// One RenderPass per layer for the bloom composer. All draw into the same
+// One RenderPass per layer for the composer. All draw into the same
 // buffer (RenderPass doesn't swap); see syncLayerPasses for the clears.
 export function addLayerPasses(composer, layers) {
     const passes = layers.map((layer) => {

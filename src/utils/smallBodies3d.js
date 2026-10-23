@@ -126,12 +126,11 @@ const fragmentShader = `
     uniform float uAlpha;
     uniform float uDim;
     uniform float uFade;
-    uniform float uLinear;
     void main() {
         float r = length(gl_PointCoord - 0.5) * 2.0;
         float alpha = (1.0 - smoothstep(0.6, 1.0, r)) * max(uAlpha * uDim, ${MIN_ALPHA}) * uFade;
         if (alpha < 0.001) discard;
-        vec3 color = mix(uColor, pow(uColor, vec3(2.2)), uLinear);  // like the planet dots
+        vec3 color = pow(uColor, vec3(2.2));  // sRGB tint -> linear, like the planet dots
         gl_FragColor = vec4(color, alpha);
     }
 `;
@@ -201,7 +200,7 @@ function orbitParts(groupId) {
 //   addTier(tierIndex, rows: Uint16Array, parts: Uint8Array): draw a tier's
 //     points (0 default, 1 more)
 //   hasTier(tierIndex), update(date), setFade(f), setCameraDistance(au), setVisible(on),
-//   setGroupVisible(groupId, on), setTierVisible(tierIndex, on), setHaze(on),
+//   setGroupVisible(groupId, on), setTierVisible(tierIndex, on),
 //   setGroupOrbits(groupId, on): draw every orbit of a group (default tier)
 //   setPartVisible(groupId, sub, on): one part of a group (small_bodies.json
 //     subgroup_ids: a belt zone, a comet family...), dots and orbit lines
@@ -217,7 +216,6 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
         uLogA: { value: new THREE.Vector2(logA[0], logA[1]) },
         uDays: { value: 0 },
         uFade: { value: 1 },
-        uLinear: { value: 0 },
     };
     const objects = [];  // {points, tier, groupId}
     const hiddenGroups = new Set();
@@ -421,7 +419,6 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
             else hiddenTiers.add(tier);
             applyVisibility();
         },
-        setHaze: (on) => { shared.uLinear.value = on ? 1 : 0; },
         pick,
         setGroupOrbits,
         setPartVisible,

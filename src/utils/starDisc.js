@@ -24,7 +24,7 @@ const LIMB_DARKENING = 0.6;
 
 // Brightest at the centre, darker towards the edge (mu = cos of the angle
 // between the surface normal and the line of sight). Colour handling as in
-// the star shader: sRGB tint, or linear when haze (bloom + sRGB output) is on.
+// the star shader: the sRGB tint made linear.
 const discVertexShader = `
     varying vec3 vNormal;
     varying vec3 vView;
@@ -38,13 +38,12 @@ const discVertexShader = `
 
 const discFragmentShader = `
     uniform vec3 uColor;
-    uniform float uLinear;
     varying vec3 vNormal;
     varying vec3 vView;
     void main() {
         float mu = clamp(dot(normalize(vNormal), normalize(vView)), 0.0, 1.0);
         vec3 color = uColor * (1.0 - ${LIMB_DARKENING.toFixed(2)} * (1.0 - mu));
-        gl_FragColor = vec4(mix(color, pow(color, vec3(2.2)), uLinear), 1.0);
+        gl_FragColor = vec4(pow(color, vec3(2.2)), 1.0);
     }
 `;
 
@@ -57,7 +56,7 @@ export function createStarDisc(starBuffers) {
     layer.visible = false;
 
     const material = new THREE.ShaderMaterial({
-        uniforms: { uColor: { value: new THREE.Color() }, uLinear: { value: 0 } },
+        uniforms: { uColor: { value: new THREE.Color() } },
         vertexShader: discVertexShader,
         fragmentShader: discFragmentShader,
     });
@@ -106,10 +105,6 @@ export function createStarDisc(starBuffers) {
                 this.index = best;
             }
             layer.visible = true;
-        },
-
-        setHaze(on) {
-            material.uniforms.uLinear.value = on ? 1 : 0;
         },
 
         dispose() {

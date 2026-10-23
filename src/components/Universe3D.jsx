@@ -4,8 +4,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { addLayerPasses, createLayer, renderLayers, syncLayerCamera, syncLayerPasses } from '../utils/layers3d';
+import { addLayerPasses, createLayer, syncLayerCamera, syncLayerPasses } from '../utils/layers3d';
 import { createStarDisc, radiusToLy } from '../utils/starDisc';
+import { SPRITE_FRAGMENT_GLSL, SPRITE_MAX_SIZE_PX, SPRITE_VERTEX_GLSL, STAR_MIN_ALPHA } from '../utils/starSprite';
 import { buildSolarSystem, ECLIPTIC_NORTH, minViewRadii } from '../utils/solarSystem3d';
 import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '../utils/smallBodies3d';
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
@@ -46,8 +47,17 @@ const SUN_BV = 0.65;
 
 // Stars fainter than this (seen from the camera) can't be picked or labelled
 const PICK_MAG_LIMIT = 7.0;
-// Opacity of stars too faint to see (see the star shader's uMinAlpha)
-const STAR_MIN_ALPHA = 0.12;
+// Glow that follows brightness (trial): a star or planet brighter than
+// GLARE_MAG gets a spike at its centre, brighter than white and scaled by
+// its light: GLARE_PEAK at the light of a GLARE_MAG star, phased in over the
+// magnitude above it, levelling off for the brightest (see utils/starSprite).
+// The bloom then only
+// takes light above GLARE_THRESHOLD, over any plain sprite's peak
+// (1.35-1.65 x its colour, plus the band), so each glow grows with its light.
+// GLARE_MAG and GLARE_PEAK are the defaults of the trial's sliders.
+const GLARE_MAG = 1.0;
+const GLARE_PEAK = 0.35;
+const GLARE_THRESHOLD = 1.6;
 // Named stars brighter than this get a label; the selected constellation's
 // named stars are always labelled
 const LABEL_MAG_LIMIT = 2.5;
@@ -75,6 +85,11 @@ const EARTH_RING_PICK_PX = 12;
 // Solar-system near plane: this fraction of the distance to the nearest
 // body's surface (see solarNearPlane)
 const SOLAR_NEAR_FRACTION = 0.3;
+// Star-layer near plane (ly, ~9,500 km). Nothing in that layer writes depth,
+// so the near plane only clips, and what it clips vanishes: a star's glow and
+// rings up close, the Sun's glow from the inner planets. Only a white dwarf's
+// sprite gets nearer (at the closest zoom), and its disc covers it then.
+const STAR_LAYER_NEAR = 1e-9;
 const FOV = 60;
 // Ring and gap labels show once the feature (its ringScaleKm) is drawn
 // this many px across: gaps sooner, as they're narrow
@@ -116,10 +131,8 @@ const LINE_OPTIONS = [
 
 // Points shader: each star stores its absolute magnitude, and the apparent
 // magnitude is recomputed from the camera distance every frame. From Earth
-// this reproduces the real sky; flying closer makes a star brighter.
-// Stars brighter than mag ~2 get a larger sprite with a wide halo (vGlow).
-// With haze on, colours are blended in linear light and run through bloom
-// + sRGB output, so the faint halos of thousands of stars add up to a glow.
+// this reproduces the real sky; flying closer makes a star brighter. The
+// sprite it gets for that magnitude: utils/starSprite.
 // uMaxSize caps the sprite; the Sun gets a bigger cap so it still gets
 // brighter from Neptune to Mercury. The 1e-9 pc clamp (~0.0002 AU) only
 // guards log(0); the camera never gets that close to a star centre.
@@ -138,45 +151,41 @@ const LINE_OPTIONS = [
 const starVertexShader = `
     attribute float absMag;
     attribute vec3 color;
-    uniform float uPixelRatio;
-    uniform float uLinear;
-    uniform float uMaxSize;
-    uniform float uMinAlpha;
     uniform vec3 uCamHigh;
     uniform vec3 uCamLow;
-    varying vec3 vColor;
-    varying float vAlpha;
-    varying float vGlow;
+    ${SPRITE_VERTEX_GLSL}
 
     void main() {
         vec3 relative = (position - uCamHigh) - uCamLow;
         vec4 mvPosition = vec4(mat3(modelViewMatrix) * relative, 1.0);
         float distPc = max(length(mvPosition.xyz) / ${LY_PER_PARSEC}, 1e-9);
         float mag = absMag + 5.0 * log(distPc) / log(10.0) - 5.0;
-
-        vGlow = clamp((2.0 - mag) / 5.0, 0.0, 1.0);
-        float size = clamp(2.0 + (6.5 - mag) * 1.3, 1.5, uMaxSize) * (1.0 + vGlow * 2.0);
-        gl_PointSize = size * uPixelRatio;
-        vAlpha = max(smoothstep(7.5, 5.0, mag), uMinAlpha);
-        vColor = mix(color, pow(color, vec3(2.2)), uLinear);  // sRGB tint -> linear for haze
+        spriteFromMagnitude(mag, color);
         gl_Position = projectionMatrix * mvPosition;
     }
 `;
 
 const starFragmentShader = `
-    varying vec3 vColor;
-    varying float vAlpha;
-    varying float vGlow;
+    ${SPRITE_FRAGMENT_GLSL}
 
     void main() {
-        float r = length(gl_PointCoord - 0.5) * 2.0;
-        // Sprite grows with vGlow, so tighten the core to keep it the same size
-        float coreScale = (1.0 + vGlow * 2.0) * (1.0 + vGlow * 2.0);
-        float core = exp(-r * r * 8.0 * coreScale);
-        float halo = 0.35 * exp(-r * r * 2.5 * coreScale) + vGlow * 0.3 * exp(-r * r * 4.0);
-        float alpha = (core + halo) * vAlpha;
-        if (alpha < 0.01) discard;
-        gl_FragColor = vec4(vColor, alpha);
+        vec4 light = sprite();
+        if (light.a <= 0.0) discard;
+        gl_FragColor = light;
+    }
+`;
+
+// Bloom high pass for glow following brightness: only the light above the
+// threshold (the stock one takes all of a pixel's light once it is over),
+// so each star's glow grows with its spike's light
+const glareHighPassShader = `
+    uniform sampler2D tDiffuse;
+    uniform float luminosityThreshold;
+    varying vec2 vUv;
+    void main() {
+        vec4 texel = texture2D(tDiffuse, vUv);
+        float v = luminance(texel.rgb);
+        gl_FragColor = vec4(texel.rgb * max(v - luminosityThreshold, 0.0) / max(v, 1e-4), 1.0);
     }
 `;
 
@@ -216,7 +225,7 @@ function setStarCamera(starCamera, position) {
     starCamera.uCamLow.value.subVectors(position, high);
 }
 
-function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxSize = 24) {
+function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxSize = SPRITE_MAX_SIZE_PX) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -224,9 +233,10 @@ function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxS
     const material = new THREE.ShaderMaterial({
         uniforms: {
             uPixelRatio: { value: pixelRatio },
-            uLinear: { value: 0 },
             uMaxSize: { value: maxSize },
             uMinAlpha: { value: STAR_MIN_ALPHA },
+            uGlare: { value: 0 },
+            uGlareMag: { value: GLARE_MAG },
             ...starCamera,
         },
         vertexShader: starVertexShader,
@@ -282,22 +292,11 @@ function placeRing(ring, xyz) {
     if (xyz) ring.position.set(xyz[0], xyz[1], xyz[2]);
 }
 
-// Line opacity is given as it looks with haze on, where lines blend in
-// linear light before the sRGB output. Without haze they blend after sRGB
-// encoding, where the same opacity looks about half as bright over the
-// dark sky; opacity^(1/2.2) matches it.
-function setLineHaze(lines, haze) {
-    if (lines) lines.material.opacity = haze ? lines.userData.opacity : Math.pow(lines.userData.opacity, 1 / 2.2);
-}
-
-function makeLines(flatPositions, color, opacity, haze) {
+function makeLines(flatPositions, color, opacity) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(flatPositions, 3));
     const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
-    const lines = new THREE.LineSegments(geometry, material);
-    lines.userData.opacity = opacity;
-    setLineHaze(lines, haze);
-    return lines;
+    return new THREE.LineSegments(geometry, material);
 }
 
 function disposeObject(obj) {
@@ -452,8 +451,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     // Earth from outside (see bodyPose / resetView).
     // {type: 'body', id} | {type: 'star', index} | {type: 'constellation'} | {type: 'none'}
     const [focus, setFocus] = useState(() => (planetFacts ? { type: 'body', id: 'Earth' } : { type: 'none' }));
-    // Bloom haze: on by default except on touch devices (heavy for phone GPUs)
-    const [showHaze, setShowHaze] = useState(() => !window.matchMedia('(pointer: coarse)').matches);
+    // Haze: the plain bloom, on every pixel brighter than 0.6
+    const [showHaze, setShowHaze] = useState(false);
+    // Trial: only bright stars glow, each by its light (GLARE_MAG). Off by
+    // default on touch devices (bloom is heavy for phone GPUs).
+    const [glowFollowsBrightness, setGlowFollowsBrightness] = useState(() => !window.matchMedia('(pointer: coarse)').matches);
+    // Trial sliders: where the glow starts (mag) and its strength (x GLARE_PEAK)
+    const [glareMag, setGlareMag] = useState(GLARE_MAG);
+    const [glareStrength, setGlareStrength] = useState(1);
     const mountRef = useRef(null);
     const labelsRef = useRef(null);
     const tooltipRef = useRef(null);
@@ -541,7 +546,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         camera.up.set(0, 1, 0);  // celestial north
 
         // Far -> near. The Earth layer (km) comes with satellites.
-        const starLayer = createLayer({ name: 'universe', unit: 1, near: 0.0001, far: 1e6 });
+        const starLayer = createLayer({ name: 'universe', unit: 1, near: STAR_LAYER_NEAR, far: 1e6 });
         // Real-size disc of the nearest star with a known radius (AU, at that star)
         const starDisc = createStarDisc(starBuffers);
         const solarLayer = createLayer({ name: 'solar system', unit: 1 / AU_PER_LY, near: 1e-7, far: 1e5 });
@@ -669,7 +674,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         loadGalaxyData().then((data) => {
             if (disposed) return;
             band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite: window.matchMedia('(pointer: coarse)').matches });
-            band.setHaze(s.haze);
         }).catch(error => console.error('Error loading the galaxy model:', error));
 
         const sun = makeStarPoints(
@@ -690,23 +694,29 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const bodySelectedRing = makeRing(0xfacc15, 0.9, 30 * pixelRatio);
         // Earth is hard to find: it gets a blue ring while its sphere is small
         // on screen (placed by updateLabels). One in each layer: the solar
-        // system's (AU) while that is drawn, the star layer's (ly) beyond it,
-        // whose near plane (0.0001 ly, ~6 AU) would clip it close by.
+        // system's (AU) while that is drawn, the star layer's (ly) beyond it.
         const earthMarkerNear = makeRing(0x60a5fa, 0.9, 18 * pixelRatio);
         const earthMarkerFar = makeRing(0x60a5fa, 0.9, 18 * pixelRatio);
         solarLayer.scene.add(bodyHoverRing, bodySelectedRing, earthMarkerNear);
         scene.add(earthMarkerFar);
 
-        // Haze: bloom post-processing, used when s.haze is on
+        // Everything renders through this composer, in linear light: colours
+        // add up in a half-float buffer, as light does, and go to sRGB once
+        // at the end. Haze (s.haze) adds the plain bloom, glow following
+        // brightness (s.glare) the glare pass; each on its own.
         const composer = new EffectComposer(renderer);
         const layerPasses = addLayerPasses(composer, layers);
         const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 0.6);
+        const glarePass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, GLARE_THRESHOLD);
+        glarePass.materialHighPassFilter.fragmentShader = glareHighPassShader;
         composer.addPass(bloomPass);
+        composer.addPass(glarePass);
         composer.addPass(new OutputPass());
 
         const s = {
             scene, camera, controls, selectedRing, bodySelectedRing, solar, cloud,
-            selectedLines: null, allLines: null, flight: null, haze: false,
+            selectedLines: null, allLines: null, flight: null, haze: false, glare: false,
+            glareMag: GLARE_MAG, glarePeak: GLARE_PEAK,
             // Earth in ly from the Sun; everything Earth-relative reads this
             earthPosition,
             bodyPose,
@@ -726,15 +736,32 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         };
         // Centred on something (the footer names it); panning away clears it
         s.focused = true;
+        // The stars' and planets' glare spikes only with the glare pass on:
+        // without it they'd just be drawn
+        const applyBloom = () => {
+            bloomPass.enabled = s.haze;
+            glarePass.enabled = s.glare;
+            const peak = s.glare ? s.glarePeak : 0;
+            [stars, gaiaStars, sun].forEach(obj => {
+                if (!obj) return;
+                obj.material.uniforms.uGlare.value = peak;
+                obj.material.uniforms.uGlareMag.value = s.glareMag;
+            });
+            solar?.setGlare(peak, s.glareMag);
+        };
         s.setHaze = (on) => {
             s.haze = on;
-            solar?.setHaze(on);
-            cloud?.setHaze(on);
-            [stars, gaiaStars, sun].forEach(obj => { if (obj) obj.material.uniforms.uLinear.value = on ? 1 : 0; });
-            starDisc.setHaze(on);
-            band?.setHaze(on);
-            setLineHaze(s.selectedLines, on);
-            setLineHaze(s.allLines, on);
+            applyBloom();
+        };
+        s.setGlare = (on) => {
+            s.glare = on;
+            applyBloom();
+        };
+        // Trial sliders: where the glow starts (mag) and the spike's peak
+        s.setGlareTuning = (mag, peak) => {
+            s.glareMag = mag;
+            s.glarePeak = peak;
+            applyBloom();
         };
         sceneRef.current = s;
 
@@ -1524,13 +1551,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             solar?.updateMinorMoonFade(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateTextures(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateRingView(solarCamera.position);
+            solar?.updateBrightness(solarCamera.position);
             updateBodyRings();
-            if (s.haze) {
-                syncLayerPasses(layerPasses, layers);
-                composer.render();
-            } else {
-                renderLayers(renderer, layers);
-            }
+            syncLayerPasses(layerPasses, layers);
+            composer.render();
             updateLabels();
             updateScaleBar();
             // Update the distance readout directly to avoid a React render per frame
@@ -1562,6 +1586,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             band?.dispose();
             starDisc.dispose();
             bloomPass.dispose();
+            glarePass.dispose();
             composer.dispose();
             renderer.dispose();
             mount.removeChild(canvas);
@@ -1766,8 +1791,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         s.selectedLines = makeLines(
             constellationLinePositions(constellationData[selectedAbbrev], starBuffers),
             0x60a5fa,
-            0.8,
-            s.haze
+            0.8
         );
         s.selectedLines.visible = linesOn('constellation');
         s.scene.add(s.selectedLines);
@@ -1781,7 +1805,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         if (linesOn('allConstellations') && !s.allLines) {
             const flat = Object.values(constellationData)
                 .flatMap(c => constellationLinePositions(c, starBuffers));
-            s.allLines = makeLines(flat, 0x94a3b8, 0.25, s.haze);
+            s.allLines = makeLines(flat, 0x94a3b8, 0.25);
             s.scene.add(s.allLines);
         }
         if (s.allLines) s.allLines.visible = linesOn('allConstellations');
@@ -1795,6 +1819,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     useEffect(() => {
         sceneRef.current?.setHaze(showHaze);
     }, [showHaze, starBuffers]);
+
+    useEffect(() => {
+        sceneRef.current?.setGlare(glowFollowsBrightness);
+    }, [glowFollowsBrightness, starBuffers]);
+
+    useEffect(() => {
+        sceneRef.current?.setGlareTuning(glareMag, GLARE_PEAK * glareStrength);
+    }, [glareMag, glareStrength, starBuffers]);
 
     useEffect(() => {
         sceneRef.current?.solar?.setShowMinorMoons(showSmallMoons);
@@ -2197,7 +2229,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     />
                     Band on the sky
                 </label>
-                <label className="universe-3d-checkbox">
+                <label className="universe-3d-checkbox" title="Bloom on everything bright: every star brighter than about mag 5 glows">
                     <input
                         type="checkbox"
                         checked={showHaze}
@@ -2205,6 +2237,40 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     />
                     Haze
                 </label>
+                <label className="universe-3d-checkbox" title="Only stars brighter than about mag 1 glow, each by how much light it gives">
+                    <input
+                        type="checkbox"
+                        checked={glowFollowsBrightness}
+                        onChange={(e) => setGlowFollowsBrightness(e.target.checked)}
+                    />
+                    Glow follows brightness
+                </label>
+                {glowFollowsBrightness && (
+                    <div className="universe-3d-glare-tuning universe-3d-sub-option">
+                        <label>
+                            <span>From mag {glareMag.toFixed(1)}</span>
+                            <input
+                                type="range"
+                                min="-1.5"
+                                max="5"
+                                step="0.1"
+                                value={glareMag}
+                                onChange={(e) => setGlareMag(Number(e.target.value))}
+                            />
+                        </label>
+                        <label>
+                            <span>Strength ×{glareStrength.toFixed(2)}</span>
+                            <input
+                                type="range"
+                                min="-2"
+                                max="4"
+                                step="0.1"
+                                value={Math.log2(glareStrength)}
+                                onChange={(e) => setGlareStrength(2 ** Number(e.target.value))}
+                            />
+                        </label>
+                    </div>
+                )}
                 <button className="button-secondary" onClick={() => resetView()}>Reset view</button>
             </div>
 

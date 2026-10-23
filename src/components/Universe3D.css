@@ -143,6 +143,20 @@
     padding-left: 1.5rem;
 }
 
+/* Trial: the glow's sliders under "Glow follows brightness" */
+.universe-3d-glare-tuning {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+}
+
+.universe-3d-glare-tuning label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
 .universe-3d-checkbox.disabled {
     opacity: 0.45;
     cursor: default;
