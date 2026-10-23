@@ -84,6 +84,12 @@ const RING_GAP_LABEL_PX = 6;
 const RING_LABEL_MARGIN_PX = 24;
 // Points tried around a ring for its label when its right-hand end is off screen
 const RING_LABEL_SAMPLES = 48;
+// Which body label wins an overlap: after the Sun, Earth and the selected
+// body, lower tiers first, then bigger bodies (other types: the last tier,
+// so asteroids, comets and the like give way to planets and moons)
+const BODY_LABEL_TIERS = { planet: 0, 'dwarf planet': 1, moon: 2 };
+// Labels closer than this (px) side by side count as overlapping
+const LABEL_GAP_PX = 4;
 // Viewing a ring feature: this many times its size away, at least the minimum
 const RING_VIEW_SCALE = 5;
 const RING_VIEW_MIN_KM = 2000;
@@ -881,13 +887,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             return { x: (bodyProjected.x + 1) / 2 * width, y: (1 - bodyProjected.y) / 2 * height, radiusPx };
         };
         const bodiesActive = () => solar && solarLayer.visible && solarFade >= BODY_MIN_FADE;
+        // Far enough out that the planets have faded: Earth's marker stands
+        // for the whole solar system (labelled so, and opening the Sun's card)
+        const outsideSolarSystem = () => solarFade < BODY_MIN_FADE;
         // Earth's ring is showing (set each frame by updateLabels)
         let earthMarked = false;
 
         // Nearest body (by screen distance) whose dot or disc is under the point
         const pickBody = (clientX, clientY, radiusPx) => {
             if (!solar) return null;
-            // From far out only Earth (marked by its ring) can be picked
+            // From far out only Earth (marked by its ring) can be picked, and
+            // outside the solar system it picks the Sun (see outsideSolarSystem)
             const active = bodiesActive();
             if (!active && !earthMarked) return null;
             const rect = renderer.domElement.getBoundingClientRect();
@@ -920,7 +930,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     best = body.id;
                 }
             }
-            return best;
+            return best === 'Earth' && outsideSolarSystem() ? 'Sun' : best;
         };
 
         // An unnamed asteroid or comet under the point (hover only), or null
@@ -1091,13 +1101,23 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             el: makeLabelEl(c.name, 'universe-3d-label universe-3d-label-constellation'),
             shown: false,
         }));
-        // Sun first, Moon last: a label overlapping an earlier one is hidden
         // Minor moons get no label (hover names them)
         const bodyLabels = (solar?.bodies ?? []).filter(body => body.major !== false).map(body => ({
             body,
             el: makeLabelEl(body.name, `universe-3d-label universe-3d-label-planet${body.id === 'Earth' ? ' universe-3d-label-earth' : ''}`),
             shown: false,
+            w: 0,
+            h: 0,
         }));
+        // The order body labels are placed in: a label overlapping an
+        // earlier one is hidden. Re-sorted when the selection changes.
+        let labelOrderFor;
+        const sortBodyLabels = (selectedId) => {
+            const rank = ({ body }) => (body.id === 'Sun' ? 0 : body.id === 'Earth' ? 1 : body.id === selectedId ? 2
+                : 3 + (BODY_LABEL_TIERS[body.type] ?? 3));
+            bodyLabels.sort((a, b) => rank(a) - rank(b) || b.body.radiusAu - a.body.radiusAu);
+            labelOrderFor = selectedId;
+        };
         // Pressing a clickable label hands the pointer to the canvas, so a
         // drag that starts on it still turns the view; a press that doesn't
         // move selects what onPress marked (see onPointerUp)
@@ -1127,6 +1147,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 labelAu: ringLabelKm(f) / KM_PER_AU,
                 scaleAu: ringScaleKm(f) / KM_PER_AU,
                 minPx: f.kind === 'gap' ? RING_GAP_LABEL_PX : RING_LABEL_PX,
+                w: 0,
+                h: 0,
             };
         }) : [];
         // Its dots aren't real objects, so its label is what you click
@@ -1138,7 +1160,24 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         };
         makeClickable(oortLabel.el, () => { pressedRegion = 'oort'; });
         let galaxyLabels = [];
-        const placedLabels = [];
+        // Body and ring label sizes (px) for the overlap tests, measured
+        // together once the view is laid out
+        let labelsMeasured = false;
+        const measureLabels = () => {
+            const measured = [...bodyLabels, ...ringLabels];
+            for (const label of measured) label.el.style.display = 'block';
+            for (const label of measured) {
+                label.w = label.el.offsetWidth;
+                label.h = label.el.offsetHeight;
+            }
+            for (const label of measured) label.el.style.display = label.shown ? 'block' : 'none';
+            labelsMeasured = true;
+        };
+        // Screen boxes {x, y, w, h} (px) of the body and ring labels placed
+        // so far this frame
+        const placedBoxes = [];
+        const overlapsPlaced = (a) => placedBoxes.some(b =>
+            a.x < b.x + b.w + LABEL_GAP_PX && b.x < a.x + a.w + LABEL_GAP_PX && a.y < b.y + b.h && b.y < a.y + a.h);
 
         const projected = new THREE.Vector3();
         const toScreen = (position, width, height) => {
@@ -1257,40 +1296,49 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     label.selected = selected;
                 }
             }
+            // Body labels go up and right of the body, in priority order (see
+            // sortBodyLabels), each only where it overlaps none placed before.
             // Earth is labelled from anywhere, with a ring, so you can always
             // find home, and other labels never hide it (next to the Sun's,
-            // its label goes underneath). The Sun is labelled like the planets.
-            placedLabels.length = 0;
+            // its label goes underneath). From outside the solar system it is
+            // labelled as that. The Sun is labelled like the planets.
+            if (!labelsMeasured && width > 0) measureLabels();
+            if (s.selectedBodyId !== labelOrderFor) sortBodyLabels(s.selectedBodyId);
+            placedBoxes.length = 0;
             let sunAt = null;
             let earthRing = false;
+            const earthText = outsideSolarSystem() ? 'Solar System' : 'Earth';
             for (const label of bodyLabels) {
                 const { body } = label;
                 const isEarth = body.id === 'Earth';
+                if (isEarth && label.el.textContent !== earthText) label.el.textContent = earthText;
                 let screenPos = null;
-                let dy = -8;
                 const wanted = opts.showLabels && (isEarth || (opts.showPlanets && bodiesActive() && solar.isShown(body)));
                 const p = wanted ? bodyOnScreen(body, width, height) : null;
                 if (body.id === 'Sun') sunAt = p;
-                const free = p && (isEarth || !placedLabels.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 16));
-                if (free) {
-                    placedLabels.push(p);
+                if (p) {
                     const r = Math.min(p.radiusPx, height / 4) * 0.7;
-                    screenPos = [p.x + r, p.y - r];
-                    if (isEarth && sunAt && Math.hypot(sunAt.x - p.x, sunAt.y - p.y) < 16) dy = 8;
-                    if (isEarth) earthRing = p.radiusPx < 5;
+                    const below = isEarth && sunAt && Math.hypot(sunAt.x - p.x, sunAt.y - p.y) < 16;
+                    const box = { x: p.x + r + 8, y: p.y - r + (below ? 8 : -8), w: label.w, h: label.h };
+                    if (isEarth || !overlapsPlaced(box)) {
+                        placedBoxes.push(box);
+                        screenPos = [box.x, box.y];
+                        if (isEarth) earthRing = p.radiusPx < 5;
+                    }
                 }
-                setLabel(label, screenPos, 8, dy);
+                setLabel(label, screenPos, 0, 0);
             }
             // Ring labels after the bodies': a body's label wins an overlap
             const ringsWanted = opts.showLabels && opts.showPlanets && bodiesActive();
             const pxPerRadian = height / 2 / Math.tan(THREE.MathUtils.degToRad(solarCamera.fov) / 2);
             for (const label of ringLabels) {
                 const selected = label.feature.id === opts.selectedRing;
-                let p = ringsWanted ? placeRingLabel(label, selected, width, height, pxPerRadian) : null;
-                // Centred text: overlapping if within about a label's size
-                if (p && !selected && placedLabels.some(q => Math.abs(q.x - p[0]) < 60 && Math.abs(q.y - p[1]) < 14)) p = null;
-                if (p) placedLabels.push({ x: p[0], y: p[1] });
-                setLabel(label, p, 0, 0);
+                const p = ringsWanted ? placeRingLabel(label, selected, width, height, pxPerRadian) : null;
+                // (centred on p)
+                const box = p && { x: p[0] - label.w / 2, y: p[1] - label.h / 2, w: label.w, h: label.h };
+                const free = box && (selected || !overlapsPlaced(box));
+                if (free) placedBoxes.push(box);
+                setLabel(label, free ? p : null, 0, 0);
                 if (selected !== label.selected) {
                     label.el.classList.toggle('selected', selected);
                     label.selected = selected;
