@@ -12,6 +12,7 @@ import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '..
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildMilkyWayBand } from '../utils/milkyWayBand';
+import { farStarSource } from '../utils/farStars';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -43,6 +44,9 @@ import Universe3DTimeBar, { nextPresetRate, TIME_RANGE } from './Universe3DTimeB
 import './Universe3D.css';
 
 const SUN_ABS_MAG = 4.83;
+// Gaia stars beyond 100 pc (utils/farStars): the first tier loads once the
+// camera is this far from the Sun (ly), where their distances start to show
+const FAR_STARS_LOAD_LY = 30;
 const SUN_BV = 0.65;
 
 // Stars fainter than this (seen from the camera) can't be picked or labelled
@@ -349,6 +353,25 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showSmallBodies, setShowSmallBodies] = useState(true);
     const [hiddenGroups, setHiddenGroups] = useState(() => new Set());
     const [showAllAsteroids, setShowAllAsteroids] = useState(false);
+    // Gaia stars beyond 100 pc: shown?, the bigger tier asked for?, its
+    // state ('idle' | 'loading' | 'loaded' | 'error'), and the tiers' meta
+    const [showFarStars, setShowFarStars] = useState(true);
+    const [showAllFarStars, setShowAllFarStars] = useState(false);
+    const [farMoreTier, setFarMoreTier] = useState('idle');
+    const [farMeta, setFarMeta] = useState(null);
+    // Fetched once per visit to the 3D view, kept across scene rebuilds
+    const farSourceRef = useRef(null);
+    if (!farSourceRef.current) {
+        const base = `${import.meta.env.BASE_URL}data/`;
+        const get = (name) => fetch(base + name).then((response) => {
+            if (!response.ok) throw new Error(`Failed to load ${name}: ${response.statusText}`);
+            return response;
+        });
+        farSourceRef.current = farStarSource(
+            name => get(name).then(r => r.json()),
+            name => get(name).then(r => r.arrayBuffer()),
+        );
+    }
     const [moreTier, setMoreTier] = useState('idle');
     // The Oort cloud model (star layer), shown with the asteroids
     const [showOort, setShowOort] = useState(true);
@@ -501,7 +524,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showBand, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
+    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showBand, showFarStars, showAllFarStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -660,6 +683,34 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             : null;
         if (gaiaStars) scene.add(gaiaStars);
 
+        // Gaia stars beyond 100 pc, one Points per tier as it loads (drawn,
+        // not picked or labelled, like gaiaStars)
+        const farPoints = [];
+        const farRequested = new Set();
+        let farDisposed = false;
+        const loadFarTier = (tier) => {
+            if (farRequested.has(tier)) return;
+            farRequested.add(tier);
+            if (tier > 0) setFarMoreTier('loading');
+            const source = farSourceRef.current;
+            source.meta().then(meta => { if (!farDisposed) setFarMeta(meta); }).catch(() => {});
+            source.load(tier).then((b) => {
+                if (farDisposed) return;
+                const points = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
+                points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                farPoints[tier] = points;
+                scene.add(points);
+                applyBloom();
+                if (tier > 0) setFarMoreTier('loaded');
+            }).catch((error) => {
+                console.error('Error loading Gaia stars:', error);
+                farRequested.delete(tier);  // a later toggle or flight tries again
+                if (tier > 0) setFarMoreTier('error');
+            });
+        };
+        // Every star Points, for the settings they share
+        const starObjects = () => [stars, gaiaStars, sun, ...farPoints].filter(Boolean);
+
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
         const oort = buildOortCloud(scene, pixelRatio);
@@ -742,8 +793,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             bloomPass.enabled = s.haze;
             glarePass.enabled = s.glare;
             const peak = s.glare ? s.glarePeak : 0;
-            [stars, gaiaStars, sun].forEach(obj => {
-                if (!obj) return;
+            starObjects().forEach(obj => {
                 obj.material.uniforms.uGlare.value = peak;
                 obj.material.uniforms.uGlareMag.value = s.glareMag;
             });
@@ -1543,7 +1593,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 setCloudShown(cloudNow);
             }
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
-            [stars, gaiaStars].forEach(obj => { if (obj) obj.material.uniforms.uMinAlpha.value = minAlpha; });
+            starObjects().forEach(obj => { if (obj !== sun) obj.material.uniforms.uMinAlpha.value = minAlpha; });
+            // Gaia stars beyond 100 pc: the first tier once heading out, the
+            // bigger one when asked
+            const opts = optionsRef.current;
+            if (opts.showFarStars && camera.position.length() > FAR_STARS_LOAD_LY) loadFarTier(0);
+            if (opts.showFarStars && opts.showAllFarStars) loadFarTier(1);
+            farPoints.forEach((points, tier) => {
+                if (points) points.visible = opts.showFarStars && (tier === 0 || opts.showAllFarStars);
+            });
             if (solar) solarLayer.near = solarNearPlane();
             starDisc.update(camera, mount.clientHeight);
             syncCameras();
@@ -1576,7 +1634,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             canvas.removeEventListener('pointermove', onPointerMove);
             canvas.removeEventListener('pointerleave', onPointerLeave);
             controls.dispose();
-            [stars, gaiaStars, sun, hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
+            farDisposed = true;
+            [stars, gaiaStars, sun, ...farPoints, hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
                 .forEach(disposeObject);
             solar?.dispose();
             cloud?.dispose();
@@ -2082,6 +2141,33 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         onChange={(e) => setShowLabels(e.target.checked)}
                     />
                     Show names
+                </label>
+                <label
+                    className="universe-3d-checkbox"
+                    title="Gaia's stars beyond 330 ly with distances good to 10%, at their measured positions (out to ~16,000 ly): they show as you fly out among the stars"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showFarStars}
+                        onChange={(e) => setShowFarStars(e.target.checked)}
+                    />
+                    Distant stars (Gaia)
+                </label>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}
+                    title={farMeta
+                        ? `Adds ${farMeta.tiers[1].count.toLocaleString()} fainter stars (a ${Math.round(farMeta.tiers[1].count * 9 / 1e6)} MB download, heavy for phones)`
+                        : 'Adds the fainter stars (a large download, heavy for phones)'}
+                >
+                    <input
+                        type="checkbox"
+                        checked={showAllFarStars}
+                        disabled={!showFarStars || farMoreTier === 'loading'}
+                        onChange={(e) => setShowAllFarStars(e.target.checked)}
+                    />
+                    {farMoreTier === 'loading' ? 'Loading…'
+                        : farMeta ? `All ${(farMeta.tiers.reduce((n, t) => n + t.count, 0) / 1e6).toFixed(1)} million` : 'All of them'}
+                    {farMoreTier === 'error' && <span className="universe-3d-error-note"> (failed)</span>}
                 </label>
                 {planetFacts && (
                     <>

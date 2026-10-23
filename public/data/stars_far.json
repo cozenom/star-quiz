@@ -1,0 +1,29 @@
+{
+ "source": "Star_Data/scripts/build_far_stars.py: Gaia DR3 (ESA/Gaia/DPAC), parallax >= 10x its error, RUWE < 1.4, beyond 100 pc, minus stars in stars_3d.json and stars_gaia.bin",
+ "layout": "per file: int16 x,y,z (ly, scene frame) for all stars, then uint8 absMag, uint8 B-V, uint8 E(BP-RP)",
+ "abs_mag": {
+  "min": -12.0,
+  "step": 0.1
+ },
+ "bv": {
+  "min": -0.4,
+  "step": 0.01,
+  "missing": 255
+ },
+ "ebprp": {
+  "step": 0.01,
+  "missing": 255
+ },
+ "tiers": [
+  {
+   "file": "stars_far_0.bin",
+   "count": 1516524,
+   "g_max": 11.5
+  },
+  {
+   "file": "stars_far_1.bin",
+   "count": 4281852,
+   "g_max": 13.0
+  }
+ ]
+}
