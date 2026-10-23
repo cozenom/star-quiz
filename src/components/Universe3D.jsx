@@ -10,6 +10,7 @@ import { buildSolarSystem, ECLIPTIC_NORTH, minViewRadii } from '../utils/solarSy
 import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '../utils/smallBodies3d';
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
+import { buildMilkyWayBand } from '../utils/milkyWayBand';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -350,6 +351,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showGalaxy, setShowGalaxy] = useState(true);
     // Its real measured masers (rings), with the model
     const [showMasers, setShowMasers] = useState(true);
+    // The Milky Way band on the sky, rendered from the model (utils/milkyWayBand)
+    const [showBand, setShowBand] = useState(true);
+    const [bandShown, setBandShown] = useState(false);
     // The model is on screen (its legend shows then); set by the render loop
     const [galaxyShown, setGalaxyShown] = useState(false);
     // Likewise the asteroid and comet cloud
@@ -443,7 +447,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
+    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showBand, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -465,7 +469,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     // galaxy.json soon after the view opens (88 kB), so the masers can be
     // searched; the model itself is only built when the camera heads out
     useEffect(() => {
-        const timer = setTimeout(() => loadGalaxyData().catch(() => {}), 3000);
+        const timer = setTimeout(() => loadGalaxyData().catch(() => {}), 0);
         return () => clearTimeout(timer);
     }, []);
 
@@ -492,7 +496,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // Real-size disc of the nearest star with a known radius (AU, at that star)
         const starDisc = createStarDisc(starBuffers);
         const solarLayer = createLayer({ name: 'solar system', unit: 1 / AU_PER_LY, near: 1e-7, far: 1e5 });
-        const layers = [starLayer, starDisc.layer, solarLayer];
+        // The sky at infinity (the Milky Way band): a layer centred on the
+        // camera, so it turns with the view but never moves
+        const skyLayer = createLayer({ name: 'sky', unit: 1, origin: () => camera.position, near: 0.1, far: 1000 });
+        skyLayer.visible = false;
+        const layers = [skyLayer, starLayer, starDisc.layer, solarLayer];
         const scene = starLayer.scene;
         const starCamera = starLayer.camera;  // for picking and labels
         const solarCamera = solarLayer.camera;
@@ -605,6 +613,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // fetched and built the first time the camera heads out. Fewer
         // points on phones.
         const galaxy = buildGalaxy(scene, pixelRatio, loadGalaxyData, { lite: window.matchMedia('(pointer: coarse)').matches });
+        // The Milky Way band on the sky: the same model's light, rendered
+        // from wherever the camera is (built when galaxy.json arrives)
+        let band = null;
+        let disposed = false;
+        loadGalaxyData().then((data) => {
+            if (disposed) return;
+            band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite: window.matchMedia('(pointer: coarse)').matches });
+            band.setHaze(s.haze);
+        }).catch(error => console.error('Error loading the galaxy model:', error));
 
         const sun = makeStarPoints(
             new Float32Array([0, 0, 0]),
@@ -666,6 +683,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             cloud?.setHaze(on);
             [stars, gaiaStars, sun].forEach(obj => { if (obj) obj.material.uniforms.uLinear.value = on ? 1 : 0; });
             starDisc.setHaze(on);
+            band?.setHaze(on);
             setLineHaze(s.selectedLines, on);
             setLineHaze(s.allLines, on);
         };
@@ -1354,6 +1372,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let galaxyWasShown = false;
         let cloudWasShown = false;
         let masersWereShown = false;
+        let bandWasShown = false;
         const animate = (now) => {
             advanceClock(now);
             updateFlight(now);
@@ -1385,6 +1404,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             galaxy.highlightMasers(openMaser ? openMaser.card
                 : optionsRef.current.selectedGalaxy === 'milky_way' ? null : optionsRef.current.selectedGalaxy);
             galaxy.update(camera.position, mount.clientHeight, camera.fov);
+            if (band) {
+                band.setVisible(optionsRef.current.showGalaxy && optionsRef.current.showBand);
+                band.update(camera.position);
+                skyLayer.visible = band.fade() > 0;
+            }
+            const bandNow = Boolean(band) && band.fade() > 0.3;
+            if (bandNow !== bandWasShown) {
+                bandWasShown = bandNow;
+                setBandShown(bandNow);
+            }
             // Legends follow what they explain (React state only on a change)
             const shown = galaxy.fade() > 0.3;
             if (shown !== galaxyWasShown) {
@@ -1444,6 +1473,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             cloud?.dispose();
             oort.dispose();
             galaxy.dispose();
+            disposed = true;
+            band?.dispose();
             starDisc.dispose();
             bloomPass.dispose();
             composer.dispose();
@@ -2069,6 +2100,18 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     <span className="universe-3d-swatch" style={{ background: 'transparent', border: '2px solid #5eead4' }} />
                     Masers (measured)
                 </label>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                    title="The band across the sky: the model's starlight added up along each line of sight and dimmed by its dust, from wherever you are. Rendered, not a photo"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showBand}
+                        disabled={!showGalaxy}
+                        onChange={(e) => setShowBand(e.target.checked)}
+                    />
+                    Band on the sky
+                </label>
                 <label className="universe-3d-checkbox">
                     <input
                         type="checkbox"
@@ -2134,11 +2177,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     <MapLegend title="Asteroids & comets" storageKey="universe3d.legend.cloud" items={cloudLegendItems} />
                 )}
                 {/* (the galaxy's cards have their own key) */}
-                {(galaxyShown || masersShown) && !(selectedGalaxy && galaxyCards) && (
+                {(galaxyShown || masersShown || bandShown) && !(selectedGalaxy && galaxyCards) && (
                     <GalaxyLegend
                         showModel={galaxyShown}
                         showMasers={masersShown}
                         showRanges={linesOn('maserRanges')}
+                        showBand={bandShown}
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
                 )}

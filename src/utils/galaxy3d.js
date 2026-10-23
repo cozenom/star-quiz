@@ -41,25 +41,25 @@ const HII_POINTS = 24;
 const DISC_MAX_KPC = 22;
 // Bar/bulge shape (ours, kpc): exponential bulge with the 10 : 6.3 : 2.6
 // axis ratio, a long bar out to the half-length with this half-width
-const BULGE_SCALE_KPC = 1.0;
-const BAR_WIDTH_KPC = 0.35;
+export const BULGE_SCALE_KPC = 1.0;
+export const BAR_WIDTH_KPC = 0.35;
 // Young arm stars thin out beyond this radius (kpc) with this e-folding
-const ARM_FADE_FROM_KPC = 11;
-const ARM_FADE_KPC = 3;
+export const ARM_FADE_FROM_KPC = 11;
+export const ARM_FADE_KPC = 3;
 // Share of arm stars in clumps, and clump size (kpc)
 const CLUMP_SHARE = 0.5;
 const CLUMP_COUNT = 5000;
 const CLUMP_KPC = 0.06;
 const HII_KPC = 0.04;
 // Arm ends fade over this share of the arm's length
-const ARM_END_FADE = 0.06;
+export const ARM_END_FADE = 0.06;
 // How many arm stars each kind gets, per kpc of arm
-const ARM_KIND_WEIGHT = { major: 1, local: 0.7, bar: 0.5, spur: 0.35 };
+export const ARM_KIND_WEIGHT = { major: 1, local: 0.7, bar: 0.5, spur: 0.35 };
 // Dust: share on the arms; their offset towards the inner edge and
 // spread (in arm widths); sprite sizes (kpc)
 const DUST_ARM_SHARE = 0.65;
-const DUST_OFFSET = 0.7;
-const DUST_SPREAD = 0.8;
+export const DUST_OFFSET = 0.7;
+export const DUST_SPREAD = 0.8;
 const DUST_ARM_SIZE_KPC = 0.28;
 const DUST_DISC_SIZE_KPC = 0.45;
 // Colours (raw hex) and brightness per point (also the cards' colour key)
@@ -189,7 +189,7 @@ const maserLineFragmentShader = `
 const smoothstep = THREE.MathUtils.smoothstep;
 
 // Arms prepared for sampling by length: cumulative length (kpc) per point
-function prepareArms(arms) {
+export function prepareArms(arms) {
     return arms.map((arm) => {
         const xy = arm.xy_kpc;
         const n = xy.length / 2;
@@ -203,7 +203,7 @@ function prepareArms(arms) {
 
 // Writes the point at distance s along an arm into out: x, y, the unit
 // normal (nx, ny: pointing towards the centre) and the width (kpc)
-function armPoint(arm, s, out) {
+export function armPoint(arm, s, out) {
     const { cum, n } = arm;
     const xy = arm.xy_kpc;
     let lo = 0, hi = n - 1;
@@ -371,7 +371,7 @@ function scatter(data, lite) {
 }
 
 // data.to_scene as a Matrix4 (kpc -> ly)
-function sceneMatrix(toScene) {
+export function sceneMatrix(toScene) {
     const m = toScene.matrix, o = toScene.offset_ly;
     return new THREE.Matrix4().set(
         m[0][0], m[0][1], m[0][2], o[0],

@@ -25,6 +25,7 @@ export const GALAXY_KEY = [
 // for their distance ranges
 export function KeySwatch({ k }) {
     if (k.line) return <span className="galaxy-legend-line" style={{ background: k.color }} />;
+    if (k.band) return <span className="galaxy-legend-band" />;
     const style = k.ring
         ? { background: 'transparent', border: `2px solid ${k.color}` }
         : { background: k.color, border: k.name === 'Dust' ? '1px solid #64748b' : undefined };
@@ -34,19 +35,20 @@ export function KeySwatch({ k }) {
 // The on-screen legend, shown while the model is: short names; the card
 // (onOpen) has the explanations. Masers' entries only while they're shown.
 const LEGEND = [
+    { band: true, name: 'Band on the sky (the model\'s light)' },
     ...GALAXY_KEY.filter(k => !k.ring),
     { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
 ];
 // showModel: the model is on screen; showMasers: its masers are (they
 // fade in before the model does); showRanges: their distance ranges are drawn
-export function GalaxyLegend({ showModel, showMasers, showRanges = true, onOpen }) {
+export function GalaxyLegend({ showModel, showMasers, showRanges = true, showBand = false, onOpen }) {
     return (
         <MapLegend
             title="Milky Way (model)"
             onTitle={onOpen}
             storageKey="universe3d.legend.galaxy"
-            items={LEGEND.filter(k => (k.maser ? showMasers && (!k.line || showRanges) : showModel)).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
+            items={LEGEND.filter(k => (k.band ? showBand : k.maser ? showMasers && (!k.line || showRanges) : showModel)).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
         />
     );
 }
