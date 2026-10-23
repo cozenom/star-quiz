@@ -229,9 +229,34 @@ export function buildLineStarInfo(constellationData) {
     return info;
 }
 
-// "ζ_Ori" -> "ζ Ori"
+const GENITIVES = {
+    And: 'Andromedae', Ant: 'Antliae', Aps: 'Apodis', Aql: 'Aquilae', Aqr: 'Aquarii', Ara: 'Arae',
+    Ari: 'Arietis', Aur: 'Aurigae', Boo: 'Boötis', CMa: 'Canis Majoris', CMi: 'Canis Minoris',
+    CVn: 'Canum Venaticorum', Cae: 'Caeli', Cam: 'Camelopardalis', Cap: 'Capricorni', Car: 'Carinae',
+    Cas: 'Cassiopeiae', Cen: 'Centauri', Cep: 'Cephei', Cet: 'Ceti', Cha: 'Chamaeleontis', Cir: 'Circini',
+    Cnc: 'Cancri', Col: 'Columbae', Com: 'Comae Berenices', CrA: 'Coronae Australis', CrB: 'Coronae Borealis',
+    Crt: 'Crateris', Cru: 'Crucis', Crv: 'Corvi', Cyg: 'Cygni', Del: 'Delphini', Dor: 'Doradus',
+    Dra: 'Draconis', Equ: 'Equulei', Eri: 'Eridani', For: 'Fornacis', Gem: 'Geminorum', Gru: 'Gruis',
+    Her: 'Herculis', Hor: 'Horologii', Hya: 'Hydrae', Hyi: 'Hydri', Ind: 'Indi', LMi: 'Leonis Minoris',
+    Lac: 'Lacertae', Leo: 'Leonis', Lep: 'Leporis', Lib: 'Librae', Lup: 'Lupi', Lyn: 'Lyncis', Lyr: 'Lyrae',
+    Men: 'Mensae', Mic: 'Microscopii', Mon: 'Monocerotis', Mus: 'Muscae', Nor: 'Normae', Oct: 'Octantis',
+    Oph: 'Ophiuchi', Ori: 'Orionis', Pav: 'Pavonis', Peg: 'Pegasi', Per: 'Persei', Phe: 'Phoenicis',
+    Pic: 'Pictoris', PsA: 'Piscis Austrini', Psc: 'Piscium', Pup: 'Puppis', Pyx: 'Pyxidis', Ret: 'Reticuli',
+    Scl: 'Sculptoris', Sco: 'Scorpii', Sct: 'Scuti', Ser: 'Serpentis', Sex: 'Sextantis', Sge: 'Sagittae',
+    Sgr: 'Sagittarii', Tau: 'Tauri', Tel: 'Telescopii', TrA: 'Trianguli Australis', Tri: 'Trianguli',
+    Tuc: 'Tucanae', UMa: 'Ursae Majoris', UMi: 'Ursae Minoris', Vel: 'Velorum', Vir: 'Virginis',
+    Vol: 'Volantis', Vul: 'Vulpeculae',
+};
+const SUPERSCRIPTS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+
+// "θ2_Tau" -> "θ² Tau (Theta² Tauri)", the form the study notes use
 export function formatBayer(bayer) {
-    return bayer ? bayer.replace(/_/g, ' ') : null;
+    if (!bayer) return null;
+    const m = bayer.match(/^(.)(\d*)_(\w+)$/);
+    const spelled = m && GREEK_NAMES[m[1]];
+    if (!spelled || !GENITIVES[m[3]]) return bayer.replace(/_/g, ' ');
+    const sup = [...m[2]].map(d => SUPERSCRIPTS[d]).join('');
+    return `${m[1]}${sup} ${m[3]} (${spelled[0].toUpperCase()}${spelled.slice(1)}${sup} ${GENITIVES[m[3]]})`;
 }
 
 const CLASS_COLOUR = {
@@ -432,8 +457,9 @@ export function buildSearchIndex(constellationData, starBuffers, lineStarInfo, p
             label: rec.name || bayer,
             sublabel: [rec.name && bayer, info?.constellations.join(', '), `mag ${formatMag(rec.mag)}`]
                 .filter(Boolean).join(' · '),
-            // Bayer also without its component number, so "alpha cen" finds "α1 Cen"
-            terms: [rec.name, bayer, bayer?.replace(/[0-9¹²³⁴⁵⁶⁷⁸⁹]/g, '')]
+            // Short ("θ² Tau") and full ("… (Theta² Tauri)") Bayer, each also without
+            // its component number, so "alpha cen" finds "α¹ Cen"
+            terms: [rec.name, ...[bayer?.split(' (')[0], bayer].flatMap(b => [b, b?.replace(/[0-9¹²³⁴⁵⁶⁷⁸⁹]/g, '')])]
                 .filter(Boolean).map(normalizeSearchText),
             sortKey: rec.mag,  // brighter stars first on equal matches
         });
