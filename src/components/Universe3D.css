@@ -31,13 +31,13 @@
 
 .universe-3d-panel {
     position: absolute;
-    top: 1rem;
+    top: 4rem;
     right: 1rem;
-    display: flex;
+    display: none;
     flex-direction: column;
     gap: 0.5rem;
     width: 14rem;
-    max-height: calc(100% - 2rem);
+    max-height: calc(100% - 5rem);
     overflow-y: auto;
     padding: 0.75rem;
     background: rgba(15, 23, 42, 0.75);
@@ -584,28 +584,24 @@ body:has(.universe-3d-screen) .stars-toggle {
 }
 
 /* Only shown on phones */
+/* The options panel folds away behind this button (open/closed is
+   remembered; see panelOpen in Universe3D) */
 .universe-3d-panel-toggle {
-    display: none;
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    min-height: 2.5rem;
+    padding: 0.4rem 0.9rem;
+    font-size: 0.9rem;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.universe-3d-panel.open {
+    display: flex;
 }
 
 @media (max-width: 767px) {
-    .universe-3d-panel-toggle {
-        display: block;
-        position: absolute;
-        top: 1rem;
-        right: 1rem;
-        min-height: 2.5rem;
-        padding: 0.4rem 0.9rem;
-        font-size: 0.9rem;
-        background: rgba(15, 23, 42, 0.8);
-        border: 1px solid rgba(148, 163, 184, 0.25);
-    }
-
-    .universe-3d-panel {
-        top: 4rem;
-        max-height: calc(100% - 5rem);
-        display: none;
-    }
 
     /* Between the Back and Options buttons */
     .universe-3d-search {
@@ -627,9 +623,6 @@ body:has(.universe-3d-screen) .stars-toggle {
         right: 0.5rem;
     }
 
-    .universe-3d-panel.open {
-        display: flex;
-    }
 
     .universe-3d-hint {
         display: none;
@@ -826,12 +819,11 @@ button.region-part-head:hover {
 }
 
 /* On-screen keys (MapLegend), shown while what they explain is: stacked
-   bottom right, left of the options panel (always open on desktop: 14rem
-   plus padding) and above the footer; phones: see the media query below */
+   bottom right, above the keybinds button */
 .map-legends {
     position: absolute;
-    right: 17.5rem;
-    bottom: 6rem;
+    right: 1rem;
+    bottom: 5rem;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -922,10 +914,17 @@ button.map-legend-title {
     opacity: 0.7;
 }
 
+/* When they'd run into the open options panel (measured: legendsShifted
+   in Universe3D), they move over to its left: 1rem margin + the panel
+   (14rem, its 0.75rem padding each side, border) + a 1rem gap */
+@media (min-width: 768px) {
+    .universe-3d-screen.legends-shifted .map-legends {
+        right: 17.75rem;
+    }
+}
+
 @media (max-width: 767px) {
-    /* The panel is folded away there: above the keybinds button */
     .map-legends {
-        right: 1rem;
         bottom: 4.5rem;
     }
 

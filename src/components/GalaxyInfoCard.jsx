@@ -12,6 +12,7 @@ const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
 
 // What each colour in the model stands for
 export const GALAXY_KEY = [
+    { band: true, name: 'Band on the sky', about: 'The Milky Way as seen from inside the disc: this model\'s starlight added up along each line of sight and dimmed by its dust, worked out from wherever you are (not a photo). The band turns into the disc as you fly out.' },
     { color: hex(GALAXY_COLORS.thin[0]), name: 'Old disc stars', about: 'Most of the disc\'s stars: long-lived, cooler and yellower than the Sun on average, spread smoothly round the whole disc.' },
     { color: hex(GALAXY_COLORS.bulge[0]), name: 'Bar and bulge', about: 'The oldest stars, with hardly any new ones forming, so the most orange.' },
     { color: hex(GALAXY_COLORS.arms[0]), name: 'Young stars', about: 'Massive stars are hot and blue-white, and burn out within a few million years, before drifting far from the arm they formed in. That is why the arms stand out.' },
@@ -35,20 +36,19 @@ export function KeySwatch({ k }) {
 // The on-screen legend, shown while the model is: short names; the card
 // (onOpen) has the explanations. Masers' entries only while they're shown.
 const LEGEND = [
-    { band: true, name: 'Band on the sky (the model\'s light)' },
-    ...GALAXY_KEY.filter(k => !k.ring),
+    ...GALAXY_KEY.filter(k => !k.ring && !k.band),
     { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
 ];
 // showModel: the model is on screen; showMasers: its masers are (they
 // fade in before the model does); showRanges: their distance ranges are drawn
-export function GalaxyLegend({ showModel, showMasers, showRanges = true, showBand = false, onOpen }) {
+export function GalaxyLegend({ showModel, showMasers, showRanges = true, onOpen }) {
     return (
         <MapLegend
             title="Milky Way (model)"
             onTitle={onOpen}
             storageKey="universe3d.legend.galaxy"
-            items={LEGEND.filter(k => (k.band ? showBand : k.maser ? showMasers && (!k.line || showRanges) : showModel)).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
+            items={LEGEND.filter(k => (k.maser ? showMasers && (!k.line || showRanges) : showModel)).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
         />
     );
 }

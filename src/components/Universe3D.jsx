@@ -353,7 +353,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showMasers, setShowMasers] = useState(true);
     // The Milky Way band on the sky, rendered from the model (utils/milkyWayBand)
     const [showBand, setShowBand] = useState(true);
-    const [bandShown, setBandShown] = useState(false);
     // The model is on screen (its legend shows then); set by the render loop
     const [galaxyShown, setGalaxyShown] = useState(false);
     // Likewise the asteroid and comet cloud
@@ -398,7 +397,51 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [selectedRegion, setSelectedRegion] = useState(null);
     const [hiddenParts, setHiddenParts] = useState(() => new Set());
     // On phones the options panel starts collapsed so it doesn't cover the sky
-    const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 767);
+    // Options panel open? Remembered; first time: open except on phones
+    const [panelOpen, setPanelOpen] = useState(() => {
+        try {
+            const v = localStorage.getItem('universe3d.panelOpen');
+            if (v !== null) return v === '1';
+        } catch { /* storage blocked */ }
+        return window.innerWidth > 767;
+    });
+    const togglePanel = () => setPanelOpen(open => {
+        try { localStorage.setItem('universe3d.panelOpen', open ? '0' : '1'); } catch { /* storage blocked */ }
+        return !open;
+    });
+    // The legends (bottom right) move left of the panel only when they'd
+    // run into it: measured whenever either changes size (the panel's
+    // sections open and close, a legend folds). Not on phones, where the
+    // open panel covers the view anyway.
+    const panelRef = useRef(null);
+    const legendsRef = useRef(null);
+    const [legendsShifted, setLegendsShifted] = useState(false);
+    useEffect(() => {
+        const panel = panelRef.current;
+        const legends = legendsRef.current;
+        if (!panel || !legends) return undefined;
+        const update = () => {
+            const screen = legends.offsetParent;
+            if (!panelOpen || !screen || legends.offsetHeight === 0 || window.matchMedia('(max-width: 767px)').matches) {
+                setLegendsShifted(false);
+                return;
+            }
+            const screenTop = screen.getBoundingClientRect().top;
+            const panelBottom = panel.getBoundingClientRect().bottom - screenTop;
+            // Where their top is at the right edge (the shift only moves them sideways)
+            const legendsTop = screen.clientHeight - parseFloat(getComputedStyle(legends).bottom) - legends.offsetHeight;
+            setLegendsShifted(legendsTop < panelBottom + 8);
+        };
+        update();
+        const observer = new ResizeObserver(update);
+        observer.observe(panel);
+        observer.observe(legends);
+        window.addEventListener('resize', update);
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', update);
+        };
+    }, [panelOpen, stars3d]);  // (the panel and legends render once the stars are in)
     // What the view is centred on, for the footer title. Starts orbiting
     // Earth from outside (see bodyPose / resetView).
     // {type: 'body', id} | {type: 'star', index} | {type: 'constellation'} | {type: 'none'}
@@ -1372,7 +1415,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let galaxyWasShown = false;
         let cloudWasShown = false;
         let masersWereShown = false;
-        let bandWasShown = false;
         const animate = (now) => {
             advanceClock(now);
             updateFlight(now);
@@ -1408,11 +1450,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 band.setVisible(optionsRef.current.showGalaxy && optionsRef.current.showBand);
                 band.update(camera.position);
                 skyLayer.visible = band.fade() > 0;
-            }
-            const bandNow = Boolean(band) && band.fade() > 0.3;
-            if (bandNow !== bandWasShown) {
-                bandWasShown = bandNow;
-                setBandShown(bandNow);
             }
             // Legends follow what they explain (React state only on a change)
             const shown = galaxy.fade() > 0.3;
@@ -1916,7 +1953,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     }
 
     return (
-        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser ? 'has-card' : ''}`}>
+        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser ? 'has-card' : ''} ${legendsShifted ? 'legends-shifted' : ''}`}>
             <div className="universe-3d-canvas" ref={mountRef} />
             <div className="universe-3d-labels" ref={labelsRef} />
             <div className="universe-3d-tooltip" ref={tooltipRef} />
@@ -1927,13 +1964,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
 
             <button
                 className="universe-3d-panel-toggle"
-                onClick={() => setPanelOpen(open => !open)}
+                onClick={togglePanel}
                 aria-expanded={panelOpen}
             >
                 {panelOpen ? '✕ Close' : '☰ Options'}
             </button>
 
-            <div className={`universe-3d-panel ${panelOpen ? 'open' : ''}`}>
+            <div ref={panelRef} className={`universe-3d-panel ${panelOpen ? 'open' : ''}`}>
                 <label className="universe-3d-checkbox">
                     <input
                         type="checkbox"
@@ -2172,17 +2209,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 />
             )}
             {/* Keys, each only while what it explains is on screen */}
-            <div className="map-legends">
+            <div ref={legendsRef} className="map-legends">
                 {cloudLegendItems.length > 0 && (
                     <MapLegend title="Asteroids & comets" storageKey="universe3d.legend.cloud" items={cloudLegendItems} />
                 )}
                 {/* (the galaxy's cards have their own key) */}
-                {(galaxyShown || masersShown || bandShown) && !(selectedGalaxy && galaxyCards) && (
+                {(galaxyShown || masersShown) && !(selectedGalaxy && galaxyCards) && (
                     <GalaxyLegend
                         showModel={galaxyShown}
                         showMasers={masersShown}
                         showRanges={linesOn('maserRanges')}
-                        showBand={bandShown}
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
                 )}
