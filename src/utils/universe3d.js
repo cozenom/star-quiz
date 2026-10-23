@@ -172,21 +172,36 @@ export function buildStarBuffers(stars3d) {
 // stars_gaia.bin rows (float32: ra hours, dec deg, dist ly, V, B-V or NaN)
 // -> typed arrays for the GPU. These stars have no catalogue rows to pick.
 const GAIA_STRIDE = 5;
+// The GCNS sphere is complete down to faint red dwarfs, while the Gaia stars
+// beyond it (utils/farStars) stop at G 11.5 by default. Only the GCNS stars
+// that bright keep the "too faint to see" dim-dot floor (the shader's
+// uMinAlpha); the fainter ones show only when really visible from the
+// camera, so the sphere's edge doesn't show. V 12 is about G 11.5 for the
+// red dwarfs that make up most of it (G is brighter than V for red stars).
+export const GAIA_FLOOR_V = 12;
 
-export function buildGaiaBuffers(rows) {
-    const count = rows.length / GAIA_STRIDE;
-    const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
-    const absMags = new Float32Array(count);
-
-    for (let i = 0; i < count; i++) {
+// -> {bright, faint}: each {positions, colors, absMags, count}; bright =
+// brighter than vLimit (V, as seen from Earth)
+export function buildGaiaBuffers(rows, vLimit = GAIA_FLOOR_V) {
+    const total = rows.length / GAIA_STRIDE;
+    const isBright = (i) => rows[i * GAIA_STRIDE + 3] < vLimit;
+    let nBright = 0;
+    for (let i = 0; i < total; i++) if (isBright(i)) nBright++;
+    const make = (count) => ({
+        positions: new Float32Array(count * 3), colors: new Float32Array(count * 3), absMags: new Float32Array(count), count,
+    });
+    const bright = make(nBright);
+    const faint = make(total - nBright);
+    let b = 0, f = 0;
+    for (let i = 0; i < total; i++) {
         const [ra, dec, dist, mag, bv] = rows.subarray(i * GAIA_STRIDE, (i + 1) * GAIA_STRIDE);
-        positions.set(raDecToXYZ(ra, dec, dist), i * 3);
-        colors.set(bvToColor(Number.isNaN(bv) ? null : bv), i * 3);
-        absMags[i] = absoluteMagnitude(mag, dist);
+        const out = isBright(i) ? bright : faint;
+        const k = isBright(i) ? b++ : f++;
+        out.positions.set(raDecToXYZ(ra, dec, dist), k * 3);
+        out.colors.set(bvToColor(Number.isNaN(bv) ? null : bv), k * 3);
+        out.absMags[k] = absoluteMagnitude(mag, dist);
     }
-
-    return { positions, colors, absMags, count };
+    return { bright, faint };
 }
 
 // One star's catalogue row as an object ({hip, ra, dec, mag, dist, err, src,

@@ -677,11 +677,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         scene.add(stars);
 
         // Gaia's nearby stars (within 100 pc, not in the catalogue above):
-        // drawn only, not picked or labelled
+        // drawn only, not picked or labelled. The faint ones get no dim-dot
+        // floor (see GAIA_FLOOR_V), so the sphere's edge doesn't show.
         const gaiaStars = gaiaBuffers
-            ? makeStarPoints(gaiaBuffers.positions, gaiaBuffers.colors, gaiaBuffers.absMags, pixelRatio, starCameraUniforms)
+            ? makeStarPoints(gaiaBuffers.bright.positions, gaiaBuffers.bright.colors, gaiaBuffers.bright.absMags, pixelRatio, starCameraUniforms)
             : null;
         if (gaiaStars) scene.add(gaiaStars);
+        const gaiaFaint = gaiaBuffers
+            ? makeStarPoints(gaiaBuffers.faint.positions, gaiaBuffers.faint.colors, gaiaBuffers.faint.absMags, pixelRatio, starCameraUniforms)
+            : null;
+        if (gaiaFaint) {
+            gaiaFaint.material.uniforms.uMinAlpha.value = 0;
+            scene.add(gaiaFaint);
+        }
 
         // Gaia stars beyond 100 pc, one Points per tier as it loads (drawn,
         // not picked or labelled, like gaiaStars)
@@ -709,7 +717,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             });
         };
         // Every star Points, for the settings they share
-        const starObjects = () => [stars, gaiaStars, sun, ...farPoints].filter(Boolean);
+        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -1593,7 +1601,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 setCloudShown(cloudNow);
             }
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
-            starObjects().forEach(obj => { if (obj !== sun) obj.material.uniforms.uMinAlpha.value = minAlpha; });
+            starObjects().forEach(obj => { if (obj !== sun && obj !== gaiaFaint) obj.material.uniforms.uMinAlpha.value = minAlpha; });
             // Gaia stars beyond 100 pc: the first tier once heading out, the
             // bigger one when asked
             const opts = optionsRef.current;
@@ -1635,7 +1643,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             canvas.removeEventListener('pointerleave', onPointerLeave);
             controls.dispose();
             farDisposed = true;
-            [stars, gaiaStars, sun, ...farPoints, hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
+            [stars, gaiaStars, gaiaFaint, sun, ...farPoints, hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
                 .forEach(disposeObject);
             solar?.dispose();
             cloud?.dispose();
