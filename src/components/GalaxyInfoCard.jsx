@@ -12,13 +12,13 @@ const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
 
 // What each colour in the model stands for
 export const GALAXY_KEY = [
-    { band: true, name: 'Band on the sky', about: 'The Milky Way as seen from inside the disc: this model\'s starlight added up along each line of sight and dimmed by its dust, worked out from wherever you are (not a photo). The band turns into the disc as you fly out.' },
+    { band: true, name: 'Band on the sky', about: 'The Milky Way as seen from inside the disc: this model\'s starlight added up along each line of sight and dimmed by the dust in front (the measured dust near the Sun, the model\'s further out), worked out from wherever you are (not a photo). The band turns into the disc as you fly out.' },
     { color: hex(GALAXY_COLORS.thin[0]), name: 'Old disc stars', about: 'Most of the disc\'s stars: long-lived, cooler and yellower than the Sun on average, spread smoothly round the whole disc.' },
     { color: hex(GALAXY_COLORS.bulge[0]), name: 'Bar and bulge', about: 'The oldest stars, with hardly any new ones forming, so the most orange.' },
     { color: hex(GALAXY_COLORS.arms[0]), name: 'Young stars', about: 'Massive stars are hot and blue-white, and burn out within a few million years, before drifting far from the arm they formed in. That is why the arms stand out.' },
     { color: hex(GALAXY_COLORS.clumps[0]), name: 'Star clusters', about: 'Young stars born together in groups (OB associations), still close to one another.' },
     { color: hex(GALAXY_COLORS.hii[0]), name: 'Glowing gas', about: 'Hydrogen lit up by young hot stars glows red-pink (H II regions), like the Orion Nebula.' },
-    { color: '#15110d', name: 'Dust', about: 'Grains of rock and soot that block light, thickest along the inner edge of each arm and in the middle of the disc.' },
+    { color: '#15110d', name: 'Dust', about: 'Grains of rock and soot that block light, thickest along the inner edge of each arm and in the middle of the disc. Within about 15,000 ly of the Sun it is the measured 3D map (below), not drawn to match.' },
     { color: hex(MASER_COLOR), ring: true, name: 'Masers', about: 'Real, not drawn to match: the measured masers at their distances. The faint line through each spans its distance\'s uncertainty, along our line of sight (cut at twice the distance when the far end is open).' },
 ];
 
@@ -147,6 +147,13 @@ function MilkyWay({ card }) {
                 <div className="region-part-head static"><strong>What is a maser?</strong></div>
                 <p className="star-info-muted region-part-about">{card.maser}</p>
             </div>
+            {card.dust && (
+                <div className="region-part">
+                    <div className="region-part-head static"><strong>The dust near the Sun is measured</strong></div>
+                    <p className="star-info-muted region-part-about">{card.dust.about}</p>
+                    <p className="star-info-muted region-part-about">{card.dust.check}</p>
+                </div>
+            )}
             <div className="region-part">
                 <div className="region-part-head static"><strong>How we know</strong></div>
                 {card.history.map(h => (
@@ -156,7 +163,7 @@ function MilkyWay({ card }) {
                     </div>
                 ))}
             </div>
-            <Sources refs={[card.orbit_speed_ref, ...card.facts.map(f => f.ref), card.maser_ref, ...card.history.map(h => h.ref)]} />
+            <Sources refs={[card.orbit_speed_ref, ...card.facts.map(f => f.ref), card.maser_ref, ...card.history.map(h => h.ref), ...(card.dust?.refs ?? [])]} />
         </>
     );
 }

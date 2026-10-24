@@ -10,7 +10,8 @@
 //   - young stars along the arms, half of them in clumps (OB associations)
 //   - H II regions: pink knots along the major arms
 //   - dust: dark soft sprites on the arms' inner (concave) edges, where
-//     the lanes are in trailing spirals, plus the dust disc
+//     the lanes are in trailing spirals, plus the dust disc; within 5 kpc
+//     of the Sun they give way to the measured dust map (utils/dustMap)
 // What is published: the frame, the bar's angle and length, the disc and
 // dust scale lengths and heights, the arms' centre lines and widths. What
 // is ours, by eye: point counts, colours, brightness, the bulge's size and
@@ -23,6 +24,7 @@
 
 import * as THREE from 'three';
 import { random } from './oortCloud.js';
+import { DUST_SHARE_GLSL, createDustMap } from './dustMap.js';
 
 const LY_PER_KPC = 3261.563777;
 
@@ -112,8 +114,10 @@ const starFragmentShader = `
 // Sprites sized in the world: size (kpc) * the matrix's ly per kpc,
 // projected with the camera's focal length (uFocalPx: px per unit at
 // distance 1). The Galactic pole in view space is mat3(modelViewMatrix)
-// of +z (the matrix is a rotation and a uniform scale).
+// of +z (the matrix is a rotation and a uniform scale). Where the measured
+// dust map is (utils/dustMap), the sprites give way to it.
 const dustVertexShader = `
+    ${DUST_SHARE_GLSL}
     attribute float size;
     attribute float alpha;
     uniform float uFocalPx;
@@ -125,19 +129,23 @@ const dustVertexShader = `
         float px = size * ${LY_PER_KPC.toFixed(3)} * uFocalPx / max(-mv.z, 1e-3);
         vec3 pole = normalize(mat3(modelViewMatrix) * vec3(0.0, 0.0, 1.0));
         float faceOn = abs(dot(normalize(mv.xyz), pole));
-        vAlpha = alpha * mix(uEdgeOn, 1.0, faceOn) * (1.0 - smoothstep(uMaxPx.x, uMaxPx.y, px));
+        vAlpha = alpha * mix(uEdgeOn, 1.0, faceOn) * (1.0 - smoothstep(uMaxPx.x, uMaxPx.y, px))
+            * (1.0 - measuredShare(uGcToHel * position + uGcToHelOffset));
         gl_PointSize = min(px, uMaxPx.y);
         gl_Position = projectionMatrix * mv;
     }
 `;
+// The background colour, not black: dust dims the light behind it towards
+// empty space, never darker
 const dustFragmentShader = `
     uniform float uFade;
+    uniform vec3 uBackground;
     varying float vAlpha;
     void main() {
         float r = length(gl_PointCoord - 0.5) * 2.0;
         float a = (1.0 - smoothstep(0.0, 1.0, r)) * vAlpha * uFade;
         if (a < 0.002) discard;
-        gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+        gl_FragColor = vec4(uBackground, a);
     }
 `;
 
@@ -563,8 +571,11 @@ function buildMasers(m, pixelRatio) {
 // highlightMasers(cardId or null),
 // pickMaser(camera, width, height, x, y, radiusPx) -> index | null,
 // maser(index) -> maserInfo, maserFade() (0..1: they fade in sooner than
-// the model), dispose()
-export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
+// the model), dispose(). dust: the measured dust (utils/dustMap
+// createDustMap), which the dust sprites give way to; background: the
+// renderer's clear colour (the sprites' colour).
+export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null, background = new THREE.Color(0, 0, 0) } = {}) {
+    const dustMap = dust ?? createDustMap(null);
     const group = new THREE.Group();
     group.matrixAutoUpdate = false;
     scene.add(group);
@@ -585,10 +596,12 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
     });
     const dustMaterial = new THREE.ShaderMaterial({
         uniforms: {
+            ...dustMap.uniforms,
             uFocalPx: { value: 1 },
             uMaxPx: { value: new THREE.Vector2(...DUST_MAX_PX).multiplyScalar(pixelRatio) },
             uEdgeOn: { value: DUST_EDGE_ON },
             uFade: { value: 0 },
+            uBackground: { value: background },
         },
         vertexShader: dustVertexShader,
         fragmentShader: dustFragmentShader,
@@ -687,6 +700,7 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             geometries.forEach(g => g.dispose());
             starMaterial.dispose();
             dustMaterial.dispose();
+            if (!dust) dustMap.dispose();
             masers?.geometries.forEach(g => g.dispose());
             masers?.materials.forEach(m => m.dispose());
         },

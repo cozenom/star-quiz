@@ -13,6 +13,7 @@ import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarSource } from '../utils/farStars';
+import { buildDustVolume, createDustMap, dustMapSource } from '../utils/dustMap';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -359,8 +360,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showAllFarStars, setShowAllFarStars] = useState(false);
     const [farMoreTier, setFarMoreTier] = useState('idle');
     const [farMeta, setFarMeta] = useState(null);
+    // The measured 3D dust near the Sun (utils/dustMap)
+    const [showDust, setShowDust] = useState(true);
     // Fetched once per visit to the 3D view, kept across scene rebuilds
     const farSourceRef = useRef(null);
+    const dustSourceRef = useRef(null);
     if (!farSourceRef.current) {
         const base = `${import.meta.env.BASE_URL}data/`;
         const get = (name) => fetch(base + name).then((response) => {
@@ -368,6 +372,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             return response;
         });
         farSourceRef.current = farStarSource(
+            name => get(name).then(r => r.json()),
+            name => get(name).then(r => r.arrayBuffer()),
+        );
+        dustSourceRef.current = dustMapSource(
             name => get(name).then(r => r.json()),
             name => get(name).then(r => r.arrayBuffer()),
         );
@@ -524,7 +532,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showBand, showFarStars, showAllFarStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
+    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showBand, showDust, showFarStars, showAllFarStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -722,17 +730,34 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
         const oort = buildOortCloud(scene, pixelRatio);
+        // The measured 3D dust near the Sun (utils/dustMap): the band and the
+        // model's dust sprites give way to it where it is; from far out a
+        // ray-marched slab draws it over the model's glow. It loads with the
+        // view (the band uses it from the start).
+        const lite = window.matchMedia('(pointer: coarse)').matches;
+        const dust = createDustMap(dustSourceRef.current);
+        const dustVolume = buildDustVolume(scene, dust, { lite, background: renderer.getClearColor(new THREE.Color()) });
+        let dustRequested = false;
+        const loadDust = () => {
+            if (dustRequested) return;
+            dustRequested = true;
+            dust.load(0).catch((error) => {
+                console.error('Error loading the dust map:', error);
+                dustRequested = false;  // a later toggle tries again
+            });
+        };
         // The Milky Way: a model from published numbers (see utils/galaxy3d),
         // fetched and built the first time the camera heads out. Fewer
         // points on phones.
-        const galaxy = buildGalaxy(scene, pixelRatio, loadGalaxyData, { lite: window.matchMedia('(pointer: coarse)').matches });
+        const galaxy = buildGalaxy(scene, pixelRatio, loadGalaxyData, { lite, dust, background: renderer.getClearColor(new THREE.Color()) });
         // The Milky Way band on the sky: the same model's light, rendered
         // from wherever the camera is (built when galaxy.json arrives)
         let band = null;
         let disposed = false;
         loadGalaxyData().then((data) => {
             if (disposed) return;
-            band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite: window.matchMedia('(pointer: coarse)').matches });
+            dust.setGalaxyFrame(data.to_scene);
+            band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite, dust });
         }).catch(error => console.error('Error loading the galaxy model:', error));
 
         const sun = makeStarPoints(
@@ -1579,11 +1604,18 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             galaxy.highlightMasers(openMaser ? openMaser.card
                 : optionsRef.current.selectedGalaxy === 'milky_way' ? null : optionsRef.current.selectedGalaxy);
             galaxy.update(camera.position, mount.clientHeight, camera.fov);
+            // The measured dust: the band uses it while it shows; the slab
+            // takes over as the band fades (or when it's off)
+            const dustWanted = optionsRef.current.showGalaxy && optionsRef.current.showDust;
+            dust.setEnabled(dustWanted);
+            if (dustWanted) loadDust();
             if (band) {
                 band.setVisible(optionsRef.current.showGalaxy && optionsRef.current.showBand);
                 band.update(camera.position);
                 skyLayer.visible = band.fade() > 0;
             }
+            dustVolume.setFade(galaxy.fade() * (1 - (band ? band.fade() : 0)));
+            dustVolume.update(camera.position);
             // Legends follow what they explain (React state only on a change)
             const shown = galaxy.fade() > 0.3;
             if (shown !== galaxyWasShown) {
@@ -1651,6 +1683,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             galaxy.dispose();
             disposed = true;
             band?.dispose();
+            dustVolume.dispose();
+            dust.dispose();
             starDisc.dispose();
             bloomPass.dispose();
             glarePass.dispose();
@@ -2322,6 +2356,18 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         onChange={(e) => setShowBand(e.target.checked)}
                     />
                     Band on the sky
+                </label>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                    title="Real dust within ~15,000 ly of the Sun, mapped in 3D from the reddening of millions of stars (Edenhofer et al. 2024, Vergely et al. 2022): the dark clouds in the band, and over the model from far out. Off: the model's dust everywhere"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showDust}
+                        disabled={!showGalaxy}
+                        onChange={(e) => setShowDust(e.target.checked)}
+                    />
+                    Dust near the Sun (measured)
                 </label>
                 <label className="universe-3d-checkbox" title="Bloom on everything bright: every star brighter than about mag 5 glows">
                     <input

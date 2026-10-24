@@ -9,18 +9,27 @@
 //   - bulge (exponential, 10 : 6.3 : 2.6) and long bar
 //   - the arms' young stars: a face-on texture rasterised from Reid's
 //     tracks, thin in z (their sigma_z)
-//   - dust: the Drimmel & Spergel disc (flaring, hole inside R0 / 2) plus
-//     lanes on the arms' inner edges, the same offset as the 3D sprites
+//   - dust: within 5 kpc of the Sun (and 400 pc of the plane) the measured
+//     3D dust map (utils/dustMap: the Great Rift, the Coalsack, the Orion
+//     and Taurus clouds), sampled in finer steps (DUST_SUB per step); the
+//     model's dust for the rest (1 - measuredShare): the Drimmel & Spergel
+//     disc (flaring, hole inside R0 / 2) plus lanes on the arms' inner
+//     edges, the same offset as the 3D sprites
 // Seen from anywhere: the band tilts and thickens as the camera moves, and
-// becomes the disc on the way out. Nearby dark clouds (the Great Rift, the
-// Coalsack) are not in this smooth model: they come with a 3D dust map.
+// becomes the disc on the way out.
 // What's ours: the brightness of each part (amplitudes, apart from the thick
-// disc's published 4%), colours, the dust's effective strength, the disc's
-// taper inside the bar, and exposure. These were tuned against Gaia's EDR3
-// all-sky flux map (ESA/Gaia/DPAC, New_Data/), seen from the Sun, at 22
-// directions: rms 23 on a 0-255 scale. What's left is mostly what a smooth
-// model can't have: nearby dark clouds (Ophiuchus, north of the centre) and
-// the bright Crux-Centaurus arm tangent near l = 300 deg.
+// disc's published 4%), colours, the model dust's effective strength, the
+// disc's taper inside the bar. The measured dust is used at its real
+// strength (A_V). Scored against Gaia's EDR3 all-sky flux map (ESA/Gaia/
+// DPAC, New_Data/; reference only, never shown) by Star_Data/scripts/tools/
+// band_reference.py, a port of this march: seen from the Sun, rms of the
+// display value 9.6 on a 0-255 scale over the sky (19.8 within 5 deg of the
+// plane, 5.6 beyond 20 deg), from 18.9 with the old exposure/contrast curve
+// and visual-band dust colours (2026-10-23). Gaia's brightness curve and
+// its bands' dust colours are taken over (CURVE, DUST_COLOR); fitting the
+// parts' amplitudes and colours too only reached 8.5 with values beyond
+// belief (bulge x50, bar x95), so they stay. What's left is mostly in the
+// plane, where the model is too dim towards the inner Galaxy.
 //
 // The march runs into a cube map round the camera, re-rendered only when
 // the camera has moved enough to change the view (turning is free), and
@@ -31,6 +40,7 @@ import {
     ARM_END_FADE, ARM_FADE_FROM_KPC, ARM_FADE_KPC, ARM_KIND_WEIGHT, BAR_WIDTH_KPC, BULGE_SCALE_KPC,
     DUST_OFFSET, DUST_SPREAD, armPoint, prepareArms, sceneMatrix,
 } from './galaxy3d.js';
+import { DUST_GLSL, DUST_MAG_PER_TAU, createDustMap } from './dustMap.js';
 
 // Face-on arm texture: +-ARMS_HALF_KPC, ARMS_SIZE px a side (~80 pc a pixel)
 const ARMS_HALF_KPC = 20;
@@ -43,6 +53,9 @@ const GALAXY_RADIUS_KPC = 25;
 const NEAR_KPC = 0.03;
 // Steps per ray (log-spaced), cube face size (px); phones get less
 const STEPS = { full: 96, lite: 56 };
+// Measured-dust samples per step where the step crosses its slab (each
+// step is ~8% of its distance, 13% on phones: ~2% either way)
+const DUST_SUB = { full: 4, lite: 6 };
 const CUBE_SIZE = { full: 384, lite: 192 };
 // Re-render when the camera has moved this share of its distance to the
 // nearest... thing that matters: its height above the plane, plus this (kpc)
@@ -62,15 +75,20 @@ const ARM_SIGMA_Z_KPC = 0.15;
 // value for a smooth model (ours). Arm lanes add DUST_ARM_AMP.
 const DUST_TAU_PER_KPC = 0.5;
 const DUST_ARM_AMP = 1.0;
-// Extinction per colour channel relative to V (red, green, blue): dust
-// dims blue more, which reddens what gets through
-const DUST_COLOR = [0.8, 1.0, 1.2];
+// Extinction per colour channel relative to A0 (red, green, blue): dust
+// dims blue more, which reddens what gets through. Gaia's bands (RP, G,
+// BP), as in its map that the band is scored against: the Gaia EDR3 law
+// (Fitzpatrick 2019) for a 5,500 K star (Star_Data/scripts/tools/
+// band_reference.py). Scored better than visual-band values (0.8, 1, 1.2)
+const DUST_COLOR = [0.643, 0.850, 1.056];
 // Colours (raw hex) of each part's light
 const COLORS = { disc: 0xf4efe6, bulge: 0xffd9a0, arms: 0xc8d8ff };
-// Brightness: light -> colour = (1 - exp(-light * EXPOSURE))^CONTRAST;
-// the power keeps the faint high-latitude glow dark against the band
-const EXPOSURE = 1.0;
-const CONTRAST = 2.0;
+// Brightness: light -> display value (0..1), the curve of Gaia's map fitted
+// to this model (band_reference.py --fit --curve-only --gaia-bands --nside
+// 64): y at CURVE_KNOTS points evenly spaced in log10(light) from log_lo
+// to log_hi, linear between, held at the ends. Fit again after changing
+// the light model
+const CURVE = { log_lo: -0.5305, log_hi: 0.6168, y: [0.0310, 0.0533, 0.0533, 0.0821, 0.1018, 0.1238, 0.1460, 0.1688, 0.1898, 0.2190, 0.2365, 0.2536, 0.2784, 0.3069, 0.3265, 0.3528, 0.3746, 0.4088, 0.4279, 0.4546, 0.4788, 0.5079, 0.5318, 0.5591, 0.6000, 0.6286, 0.6609, 0.7052, 0.7451, 0.7714, 0.8088, 0.8399] };
 // Gaia's map is stretched to make the band vivid; as a backdrop behind the
 // real stars it is shown at this share of that (ours, by eye)
 const DISPLAY_BRIGHTNESS = 0.4;
@@ -83,6 +101,8 @@ const LY_PER_KPC = 3261.563777;
 // The light along one ray: the GLSL shared by the cube pass and the
 // preview's all-sky map. origin and dir in Galactocentric kpc (dir unit).
 export const BAND_GLSL = /* glsl */ `
+    ${DUST_GLSL}
+    uniform int uDustSub;        // measured-dust samples per step
     uniform sampler2D uArms;     // r: young-star light, g: arm dust (face-on)
     uniform float uArmsHalf;     // the texture spans +-this (kpc)
     uniform float uR0;
@@ -125,6 +145,9 @@ export const BAND_GLSL = /* glsl */ `
             float t = t0 * pow(ratio, float(i) / float(uSteps));
             float ds = t - tPrev;
             vec3 p = origin + dir * (0.5 * (t + tPrev));
+            // The step's ends, Galactic pc from the Sun (for the measured dust)
+            vec3 ha = uGcToHel * (origin + dir * tPrev) + uGcToHelOffset;
+            vec3 hb = uGcToHel * (origin + dir * t) + uGcToHelOffset;
             tPrev = t;
             float R = length(p.xy);
             float az = abs(p.z);
@@ -148,8 +171,20 @@ export const BAND_GLSL = /* glsl */ `
             float hole = x < 0.5 ? exp(-(x - 0.5) * (x - 0.5) / 0.0625) : 1.0;
             float dust = (exp(-(max(R, 0.5 * uR0) - uR0) / uDust.x) * hole * uDustAmp.x
                 + uDustAmp.y * arm.g) * sech2(p.z / hz);
+            // The measured dust where it is (tau_V over the step), the
+            // model's for the rest
+            float measured = 0.0;
+            if (dustSegment(ha, hb)) {
+                float av = 0.0;
+                for (int k = 0; k < 16; k++) {
+                    if (k >= uDustSub) break;
+                    av += measuredDust(mix(ha, hb, (float(k) + 0.5) / float(uDustSub)));
+                }
+                measured = av / float(uDustSub) * ds * 1000.0 / ${DUST_MAG_PER_TAU.toFixed(6)};
+            }
+            float modelShare = 1.0 - measuredShare(0.5 * (ha + hb));
             vec3 emit = uColDisc * disc + uColBulge * bulge + uColArms * young;
-            vec3 dtau = uDustColor * (dust * uDustAmp.z * ds);
+            vec3 dtau = uDustColor * (dust * uDustAmp.z * ds * modelShare + measured);
             // Light from this step, dimmed by the dust in front of it and
             // (half) by its own
             light += emit * ds * exp(-tau - 0.5 * dtau);
@@ -241,8 +276,9 @@ export function bandUniforms(data, lite = false) {
         uGalaxyRadius: { value: GALAXY_RADIUS_KPC },
         uNear: { value: NEAR_KPC },
         uSteps: { value: lite ? STEPS.lite : STEPS.full },
-        uExposure: { value: EXPOSURE },
-        uContrast: { value: CONTRAST },
+        uDustSub: { value: lite ? DUST_SUB.lite : DUST_SUB.full },
+        uCurve: { value: CURVE.y },
+        uCurveRange: { value: new THREE.Vector2(CURVE.log_lo, CURVE.log_hi) },
     };
 }
 
@@ -257,13 +293,19 @@ const marchVertexShader = /* glsl */ `
 const marchFragmentShader = /* glsl */ `
     uniform vec3 uCam;      // camera, Galactocentric kpc
     uniform mat3 uToGc;     // scene direction -> Galactocentric direction
-    uniform float uExposure;
-    uniform float uContrast;
+    uniform float uCurve[${CURVE.y.length}];
+    uniform vec2 uCurveRange;  // log10(light) at the first and last knot
     varying vec3 vDir;
     ${BAND_GLSL}
+    float curve(float light) {
+        float x = clamp((log(max(light, 1e-30)) * 0.4342945 - uCurveRange.x) / (uCurveRange.y - uCurveRange.x), 0.0, 1.0)
+            * ${(CURVE.y.length - 1).toFixed(1)};
+        int i = int(min(floor(x), ${(CURVE.y.length - 2).toFixed(1)}));
+        return mix(uCurve[i], uCurve[i + 1], x - float(i));
+    }
     void main() {
         vec3 light = bandLight(uCam, normalize(uToGc * normalize(vDir)));
-        gl_FragColor = vec4(pow(1.0 - exp(-light * uExposure), vec3(uContrast)), 1.0);
+        gl_FragColor = vec4(curve(light.r), curve(light.g), curve(light.b), 1.0);
     }
 `;
 // The sky sphere shows the cube map
@@ -279,10 +321,12 @@ const skyFragmentShader = /* glsl */ `
     }
 `;
 
-// scene: the sky layer's scene (a layer whose origin is the camera).
+// scene: the sky layer's scene (a layer whose origin is the camera); dust:
+// the measured dust (utils/dustMap createDustMap; none: the model's only).
 // Returns update(cameraPositionLy) (re-renders the cube when needed),
 // fade(), setVisible(on), dispose()
-export function buildMilkyWayBand(renderer, scene, data, { lite = false } = {}) {
+export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = null } = {}) {
+    const dustMap = dust ?? createDustMap(null);
     const toScene = sceneMatrix(data.to_scene);           // kpc -> ly
     const fromScene = toScene.clone().invert();           // ly -> kpc
     const toGc = new THREE.Matrix3().setFromMatrix4(fromScene);
@@ -291,6 +335,7 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false } = {}) 
 
     const uniforms = {
         ...bandUniforms(data, lite),
+        ...dustMap.uniforms,
         uCam: { value: new THREE.Vector3() },
         uToGc: { value: toGc },
     };
@@ -324,6 +369,8 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false } = {}) 
 
     const camKpc = new THREE.Vector3();
     const lastKpc = new THREE.Vector3(Infinity, 0, 0);
+    // New dust boxes, or the dust switched: draw again
+    const stopListening = dustMap.onChange(() => lastKpc.set(Infinity, 0, 0));
     let wanted = true;
     let fade = 0;
     return {
@@ -344,6 +391,8 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false } = {}) 
         fade: () => fade,
         setVisible: (on) => { wanted = on; },
         dispose: () => {
+            stopListening();
+            if (!dust) dustMap.dispose();
             scene.remove(sky);
             sphereGeometry.dispose();
             marchMaterial.dispose();
