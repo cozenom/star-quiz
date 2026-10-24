@@ -8,14 +8,11 @@
 // across degrees of sky. Checked against Gaia stars' own reddening in the
 // build (output/dust_map_check.txt).
 //
-// Used three ways, so the measured dust is counted once:
-//   - the band's ray-march (utils/milkyWayBand) samples it where it is and
-//     keeps the model's dust only for the rest (1 - measuredShare)
-//   - the model's dust sprites (utils/galaxy3d) fade out where it is
-//   - from far out, once the band has faded, a ray-marched slab in the
-//     star layer darkens the model's glow behind it (buildDustVolume)
-// Stars are not dimmed by it: their brightness is as seen from Earth, dust
-// included (plan.txt: true colours later).
+// Used by the band's ray-march and the 3D view's dust volume (utils/
+// milkyWayBand), which sample it where it is and keep the model's dust
+// only for the rest (1 - measuredShare), so it's counted once. Stars are
+// not dimmed by it: their brightness is as seen from Earth, dust included
+// (plan.txt: true colours later).
 //
 // One set of uniforms (createDustMap's) is shared by every material that
 // uses it, so loading a box or switching the dust off reaches them all.
@@ -25,16 +22,12 @@ import * as THREE from 'three';
 // The shader has this many box slots (the build writes up to this many)
 const MAX_BOXES = 4;
 const MAG_PER_TAU = 2.5 / Math.LN10;
-// Volume: steps per ray (phones fewer); rays start this far from the
-// camera (pc) and space their steps geometrically from there
-const VOLUME_STEPS = { full: 160, lite: 80 };
-const VOLUME_NEAR_PC = 2;
 
 // Where the measured dust is, as a share 0..1 of the dust there (the model
 // has the rest): faded out at the outer box's edge and at the slab's top
 // and bottom (the build's fade_pc). No samplers, so vertex shaders can use
 // it. p: Galactic pc from the Sun.
-export const DUST_SHARE_GLSL = /* glsl */ `
+const DUST_SHARE_GLSL = /* glsl */ `
     uniform float uDustOn;       // 1 once the boxes are in and the dust is wanted
     uniform vec4 uDustFade;      // xy edge from, to; |z| from, to (pc)
     uniform mat3 uGcToHel;       // Galactocentric kpc -> Galactic pc from the Sun
@@ -151,8 +144,7 @@ function boxTexture(buffer, box, wrapX = false) {
 // The measured dust's state and shared uniforms. source: dustMapSource.
 // Returns {uniforms, load(tier) -> Promise, loaded(tier), setGalaxyFrame
 // (galaxy.json to_scene), setEnabled(on), enabled(), onChange(fn),
-// toLocal(ly Vector3, out) -> Galactic pc, toScene (Matrix4, pc -> ly, once
-// the meta is in), dispose()}
+// dispose()}
 export function createDustMap(source) {
     const uniforms = {
         uDustOn: { value: 0 },
@@ -251,117 +243,9 @@ export function createDustMap(source) {
             listeners.add(fn);
             return () => listeners.delete(fn);
         },
-        // Scene ly -> Galactic pc from the Sun (once the meta is in)
-        toLocal: (ly, out) => out.copy(ly).applyMatrix4(fromScene),
-        toScene,
         dispose: () => {
             textures.forEach(t => t.dispose());
             listeners.clear();
-        },
-    };
-}
-
-// The slab ray-marched as a volume in the star layer (ly): the background
-// colour, with the opacity of the measured dust along each ray (1 -
-// exp(-tau_V)), so it dims what was drawn before it (the band and the
-// model's glow; draw it before the catalogue's stars) towards empty space,
-// never darker (dust only blocks light from behind it). Shown with setFade
-// (Universe3D: as the band fades out). background: the renderer's clear
-// colour. Returns {update(cameraLy), setFade(f), dispose()}.
-const volumeVertexShader = /* glsl */ `
-    varying vec3 vLocal;
-    void main() {
-        vLocal = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-`;
-const volumeFragmentShader = /* glsl */ `
-    ${DUST_GLSL}
-    uniform vec3 uCamLocal;    // camera, Galactic pc from the Sun
-    uniform vec3 uBackground;  // empty space's colour (the clear colour)
-    uniform float uFade;
-    uniform int uSteps;
-    uniform float uNear;
-    varying vec3 vLocal;
-    void main() {
-        vec3 dir = normalize(vLocal - uCamLocal);
-        vec3 inv = 1.0 / (dir + vec3(1e-9));
-        vec3 ta = (-uSlabHalf - uCamLocal) * inv;
-        vec3 tb = (uSlabHalf - uCamLocal) * inv;
-        vec3 tmin = min(ta, tb), tmax = max(ta, tb);
-        float t0 = max(max(tmin.x, tmin.y), max(tmin.z, uNear));
-        float t1 = min(min(tmax.x, tmax.y), tmax.z);
-        if (t1 <= t0) discard;
-        // Geometric steps (even when far: t1 / t0 is then close to 1),
-        // jittered per pixel against banding
-        float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-        float ratio = t1 / t0;
-        float n = float(uSteps);
-        float av = 0.0;
-        for (int i = 0; i < 512; i++) {
-            if (i >= uSteps) break;
-            float ta0 = t0 * pow(ratio, float(i) / n);
-            float ta1 = t0 * pow(ratio, float(i + 1) / n);
-            av += measuredDust(uCamLocal + dir * mix(ta0, ta1, jitter)) * (ta1 - ta0);
-        }
-        float alpha = (1.0 - exp(-av / ${MAG_PER_TAU.toFixed(6)})) * uFade;
-        if (alpha < 0.002) discard;
-        gl_FragColor = vec4(uBackground, alpha);
-    }
-`;
-
-export function buildDustVolume(scene, dust, { lite = false, background = new THREE.Color(0, 0, 0) } = {}) {
-    const uniforms = {
-        ...dust.uniforms,
-        uCamLocal: { value: new THREE.Vector3() },
-        uBackground: { value: background },
-        uFade: { value: 0 },
-        uSteps: { value: lite ? VOLUME_STEPS.lite : VOLUME_STEPS.full },
-        uNear: { value: VOLUME_NEAR_PC },
-    };
-    const material = new THREE.ShaderMaterial({
-        uniforms,
-        vertexShader: volumeVertexShader,
-        fragmentShader: volumeFragmentShader,
-        side: THREE.BackSide,
-        transparent: true,
-        depthWrite: false,
-        depthTest: false,
-    });
-    let mesh = null;
-    let fade = 0;
-    // Built once the slab's size is known (the first box in)
-    const build = () => {
-        if (mesh || !dust.enabled()) return;
-        const h = uniforms.uSlabHalf.value;
-        const geometry = new THREE.BoxGeometry(2 * h.x, 2 * h.y, 2 * h.z);
-        mesh = new THREE.Mesh(geometry, material);
-        mesh.matrixAutoUpdate = false;
-        mesh.matrix.copy(dust.toScene);
-        mesh.matrixWorldNeedsUpdate = true;
-        // After the model's points (-3), before its dust sprites (-2) and
-        // the catalogue's stars, so it darkens only the glow behind
-        mesh.renderOrder = -2.5;
-        mesh.frustumCulled = false;
-        scene.add(mesh);
-    };
-    return {
-        update: (cameraLy) => {
-            build();
-            if (!mesh) return;
-            mesh.visible = fade > 0 && dust.enabled();
-            if (mesh.visible) dust.toLocal(cameraLy, uniforms.uCamLocal.value);
-        },
-        setFade: (f) => {
-            fade = f;
-            uniforms.uFade.value = f;
-        },
-        dispose: () => {
-            if (mesh) {
-                scene.remove(mesh);
-                mesh.geometry.dispose();
-            }
-            material.dispose();
         },
     };
 }

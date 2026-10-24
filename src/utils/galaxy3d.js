@@ -9,9 +9,9 @@
 //   - old disc (thin + thick) and the bar/bulge: warm white and yellow
 //   - young stars along the arms, half of them in clumps (OB associations)
 //   - H II regions: pink knots along the major arms
-//   - dust: dark soft sprites on the arms' inner (concave) edges, where
-//     the lanes are in trailing spirals, plus the dust disc; within 5 kpc
-//     of the Sun they give way to the measured dust map (utils/dustMap)
+//   - dust: not here: a ray-marched volume (utils/milkyWayBand
+//     buildGalaxyDust), the band's own dust (the Drimmel & Spergel disc,
+//     lanes on the arms' inner edges, the measured map near the Sun)
 // What is published: the frame, the bar's angle and length, the disc and
 // dust scale lengths and heights, the arms' centre lines and widths. What
 // is ours, by eye: point counts, colours, brightness, the bulge's size and
@@ -24,9 +24,7 @@
 
 import * as THREE from 'three';
 import { random } from './oortCloud.js';
-import { DUST_SHARE_GLSL, createDustMap } from './dustMap.js';
 
-const LY_PER_KPC = 3261.563777;
 
 // Shown between these camera distances from the Sun (ly): fading in once
 // the catalogue's stars are a cloud behind you (their too-faint-to-see dots
@@ -36,7 +34,7 @@ export const FADE_IN_LY = [2000, 12000];
 const BUILD_LY = 1000;
 
 // Point counts (desktop; phones get LITE_FACTOR of them)
-const COUNTS = { thin: 360000, thick: 30000, bulge: 70000, bar: 60000, arms: 260000, hii: 1400, dust: 26000 };
+const COUNTS = { thin: 360000, thick: 30000, bulge: 70000, bar: 60000, arms: 260000, hii: 1400 };
 const LITE_FACTOR = 0.35;
 const HII_POINTS = 24;
 // Old disc stars past this radius are dropped (kpc)
@@ -57,26 +55,16 @@ const HII_KPC = 0.04;
 export const ARM_END_FADE = 0.06;
 // How many arm stars each kind gets, per kpc of arm
 export const ARM_KIND_WEIGHT = { major: 1, local: 0.7, bar: 0.5, spur: 0.35 };
-// Dust: share on the arms; their offset towards the inner edge and
-// spread (in arm widths); sprite sizes (kpc)
-const DUST_ARM_SHARE = 0.65;
+// Dust lanes (the band's arm texture): offset towards the arm's inner edge
+// and spread, in arm widths
 export const DUST_OFFSET = 0.7;
 export const DUST_SPREAD = 0.8;
-const DUST_ARM_SIZE_KPC = 0.28;
-const DUST_DISC_SIZE_KPC = 0.45;
 // Colours (raw hex) and brightness per point (also the cards' colour key)
 export const GALAXY_COLORS = {
     thin: [0xffe7c4, 0.1], thick: [0xffd9a8, 0.06], bulge: [0xffd08a, 0.06], bar: [0xffd49a, 0.05],
     arms: [0xbcd2ff, 0.05], clumps: [0xd4e2ff, 0.07], hii: [0xff6f9c, 0.18],
 };
 const SIZE_PX = { thin: 1.6, arms: 1.8, clumps: 2.2, hii: 2.6 };
-const DUST_ALPHA = { arm: 0.28, disc: 0.12 };
-// Seen edge-on, the light crosses far more dust: each sprite's opacity
-// drops to this share so the lane stays dark without hiding the bulge
-const DUST_EDGE_ON = 0.3;
-// Dust sprites larger than this (px) fade out: they'd fill the screen
-// when the camera is inside the disc
-const DUST_MAX_PX = [24, 72];
 // The measured masers (Reid et al. 2019 Table 1): real positions, drawn as
 // rings, each with a faint line along the sightline over its distance's
 // 1-sigma range. With a card open, the other arms' masers dim to this.
@@ -109,43 +97,6 @@ const starFragmentShader = `
         float a = 1.0 - smoothstep(0.3, 1.0, r);
         if (a <= 0.0) discard;
         gl_FragColor = vec4(vColor * uFade, a);
-    }
-`;
-// Sprites sized in the world: size (kpc) * the matrix's ly per kpc,
-// projected with the camera's focal length (uFocalPx: px per unit at
-// distance 1). The Galactic pole in view space is mat3(modelViewMatrix)
-// of +z (the matrix is a rotation and a uniform scale). Where the measured
-// dust map is (utils/dustMap), the sprites give way to it.
-const dustVertexShader = `
-    ${DUST_SHARE_GLSL}
-    attribute float size;
-    attribute float alpha;
-    uniform float uFocalPx;
-    uniform vec2 uMaxPx;
-    uniform float uEdgeOn;
-    varying float vAlpha;
-    void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        float px = size * ${LY_PER_KPC.toFixed(3)} * uFocalPx / max(-mv.z, 1e-3);
-        vec3 pole = normalize(mat3(modelViewMatrix) * vec3(0.0, 0.0, 1.0));
-        float faceOn = abs(dot(normalize(mv.xyz), pole));
-        vAlpha = alpha * mix(uEdgeOn, 1.0, faceOn) * (1.0 - smoothstep(uMaxPx.x, uMaxPx.y, px))
-            * (1.0 - measuredShare(uGcToHel * position + uGcToHelOffset));
-        gl_PointSize = min(px, uMaxPx.y);
-        gl_Position = projectionMatrix * mv;
-    }
-`;
-// The background colour, not black: dust dims the light behind it towards
-// empty space, never darker
-const dustFragmentShader = `
-    uniform float uFade;
-    uniform vec3 uBackground;
-    varying float vAlpha;
-    void main() {
-        float r = length(gl_PointCoord - 0.5) * 2.0;
-        float a = (1.0 - smoothstep(0.0, 1.0, r)) * vAlpha * uFade;
-        if (a < 0.002) discard;
-        gl_FragColor = vec4(uBackground, a);
     }
 `;
 
@@ -346,36 +297,7 @@ function scatter(data, lite) {
         }
     }
 
-    // Dust (Drimmel & Spergel 2001 disc: exp(-R/h) sech^2(z/h_z), the
-    // height flaring past flare_start, a hole inside half the Sun's radius)
-    const dd = data.dust_disc;
-    const r0 = Math.hypot(data.sun_kpc[0], data.sun_kpc[1]);
-    const dustHeight = (R) => (dd.base_scale_height_pc + dd.flare_pc_per_kpc * Math.max(R - dd.flare_start_kpc, 0)) / 1000;
-    // sech^2(z/h) has a standard deviation of ~0.9 h
-    const dustZ = (R) => gauss() * 0.9 * dustHeight(R);
-    const dust = { pos: [], size: [], alpha: [] };
-    for (let i = 0, n = count('dust'); i < n; i++) {
-        if (rand() < DUST_ARM_SHARE) {
-            const arm = pickArm(false);
-            armPoint(arm, rand() * arm.length, p);
-            const R = Math.hypot(p.x, p.y);
-            if (rand() > p.endFade * Math.exp(-Math.max(R - ARM_FADE_FROM_KPC, 0) / ARM_FADE_KPC)) { i--; continue; }
-            const off = (DUST_OFFSET + gauss() * DUST_SPREAD) * p.w;
-            dust.pos.push(p.x + p.nx * off, p.y + p.ny * off, dustZ(R));
-            dust.size.push(DUST_ARM_SIZE_KPC * (0.6 + 0.8 * rand()));
-            dust.alpha.push(Math.min(DUST_ALPHA.arm * Math.sqrt(boost), 0.9));
-            continue;
-        }
-        const R = -dd.scale_length_kpc * Math.log(Math.max(rand() * rand(), 1e-12));
-        const x = R / r0;
-        const hole = x < 0.5 ? Math.exp(-((x - 0.5) ** 2) / 0.25 ** 2) : 1;
-        if (R > DISC_MAX_KPC || rand() > hole) { i--; continue; }
-        const phi = 2 * Math.PI * rand();
-        dust.pos.push(R * Math.cos(phi), R * Math.sin(phi), dustZ(R));
-        dust.size.push(DUST_DISC_SIZE_KPC * (0.6 + 0.8 * rand()));
-        dust.alpha.push(Math.min(DUST_ALPHA.disc * Math.sqrt(boost), 0.9));
-    }
-    return { stars, dust, arms };
+    return { stars, arms };
 }
 
 // data.to_scene as a Matrix4 (kpc -> ly)
@@ -504,7 +426,7 @@ function buildMasers(m, pixelRatio) {
         depthTest: false,
     });
     const rings = new THREE.Points(g, ringMaterial);
-    // After the model's stars and dust, so the dust never hides them
+    // After the model's stars and the dust volume, so the dust never hides them
     rings.renderOrder = -1;
     rings.frustumCulled = false;
 
@@ -565,17 +487,14 @@ function buildMasers(m, pixelRatio) {
 }
 
 // load: () => Promise of galaxy.json (fetched on first need).
-// Returns update(cameraPosition ly, viewportHeightPx, fovDeg),
+// Returns update(cameraPosition ly),
 // fade(), labels() [{id, name, position (ly)}], setVisible(on),
 // setMasersVisible(on), setMaserRangesVisible(on) (their distance ranges),
 // highlightMasers(cardId or null),
 // pickMaser(camera, width, height, x, y, radiusPx) -> index | null,
 // maser(index) -> maserInfo, maserFade() (0..1: they fade in sooner than
-// the model), dispose(). dust: the measured dust (utils/dustMap
-// createDustMap), which the dust sprites give way to; background: the
-// renderer's clear colour (the sprites' colour).
-export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null, background = new THREE.Color(0, 0, 0) } = {}) {
-    const dustMap = dust ?? createDustMap(null);
+// the model), dispose()
+export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
     const group = new THREE.Group();
     group.matrixAutoUpdate = false;
     scene.add(group);
@@ -594,20 +513,6 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null
         depthWrite: false,
         blending: THREE.AdditiveBlending,
     });
-    const dustMaterial = new THREE.ShaderMaterial({
-        uniforms: {
-            ...dustMap.uniforms,
-            uFocalPx: { value: 1 },
-            uMaxPx: { value: new THREE.Vector2(...DUST_MAX_PX).multiplyScalar(pixelRatio) },
-            uEdgeOn: { value: DUST_EDGE_ON },
-            uFade: { value: 0 },
-            uBackground: { value: background },
-        },
-        vertexShader: dustVertexShader,
-        fragmentShader: dustFragmentShader,
-        transparent: true,
-        depthWrite: false,
-    });
     const geometries = [];
     let labels = [];
     let state = 'idle';  // idle -> loading -> ready | failed
@@ -615,7 +520,7 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null
     let fade = 0;
 
     const build = (data) => {
-        const { stars, dust, arms } = scatter(data, lite);
+        const { stars, arms } = scatter(data, lite);
         group.matrix.copy(sceneMatrix(data.to_scene));
         group.matrixWorldNeedsUpdate = true;
 
@@ -624,21 +529,14 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null
         g.setAttribute('color', new THREE.Float32BufferAttribute(stars.col, 3));
         g.setAttribute('size', new THREE.Float32BufferAttribute(stars.size, 1));
         const points = new THREE.Points(g, starMaterial);
-        // Before the catalogue's stars and the Sun (transparent objects
-        // draw in renderOrder), so the dust never covers them
+        // Before the dust volume (-2.5, utils/milkyWayBand), the catalogue's
+        // stars and the Sun (transparent objects draw in renderOrder), so
+        // the dust dims these points and never the stars
         points.renderOrder = -3;
         points.frustumCulled = false;
 
-        const dg = new THREE.BufferGeometry();
-        dg.setAttribute('position', new THREE.Float32BufferAttribute(dust.pos, 3));
-        dg.setAttribute('size', new THREE.Float32BufferAttribute(dust.size, 1));
-        dg.setAttribute('alpha', new THREE.Float32BufferAttribute(dust.alpha, 1));
-        const dustPoints = new THREE.Points(dg, dustMaterial);
-        dustPoints.renderOrder = -2;
-        dustPoints.frustumCulled = false;
-
-        group.add(points, dustPoints);
-        geometries.push(g, dg);
+        group.add(points);
+        geometries.push(g);
 
         const toLy = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(group.matrix);
         labels = [{ id: 'centre', name: CENTRE_LABEL, position: toLy(0, 0, 0) }];
@@ -658,7 +556,7 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null
     const masersShown = () => masers !== null && wanted && masersWanted && maserFade > 0;
 
     return {
-        update: (cameraPosition, viewportHeightPx, fovDeg) => {
+        update: (cameraPosition) => {
             const ly = cameraPosition.length();
             if (state === 'idle' && wanted && ly > BUILD_LY) {
                 state = 'loading';
@@ -670,8 +568,6 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null
             fade = state === 'ready' ? smoothstep(ly, ...FADE_IN_LY) : 0;
             group.visible = wanted && fade > 0;
             starMaterial.uniforms.uFade.value = fade;
-            dustMaterial.uniforms.uFade.value = fade;
-            dustMaterial.uniforms.uFocalPx.value = viewportHeightPx * pixelRatio / (2 * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
             maserFade = state === 'ready' ? smoothstep(ly, ...MASER_FADE_IN_LY) : 0;
             maserGroup.visible = masersShown();
             masers?.setFade(maserFade);
@@ -699,8 +595,6 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false, dust = null
             scene.remove(group, maserGroup);
             geometries.forEach(g => g.dispose());
             starMaterial.dispose();
-            dustMaterial.dispose();
-            if (!dust) dustMap.dispose();
             masers?.geometries.forEach(g => g.dispose());
             masers?.materials.forEach(m => m.dispose());
         },

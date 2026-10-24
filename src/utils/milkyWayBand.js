@@ -125,6 +125,22 @@ export const BAND_GLSL = /* glsl */ `
 
     float sech2(float x) { float c = cosh(clamp(x, -20.0, 20.0)); return 1.0 / (c * c); }
 
+    // The model's dust at p (Galactocentric kpc), V-band optical depth per
+    // kpc: the Drimmel & Spergel disc (flaring, a hole inside R0 / 2) plus
+    // lanes on the arms' inner edges (lane: the arm texture's g there)
+    float modelDust(vec3 p, float lane) {
+        float R = length(p.xy);
+        float hz = uDust.y + uDust.z * max(R - uDust.w, 0.0);
+        float x = R / uR0;
+        float hole = x < 0.5 ? exp(-(x - 0.5) * (x - 0.5) / 0.0625) : 1.0;
+        return (exp(-(max(R, 0.5 * uR0) - uR0) / uDust.x) * hole * uDustAmp.x + uDustAmp.y * lane)
+            * sech2(p.z / hz) * uDustAmp.z;
+    }
+    vec2 armTexel(vec3 p) {
+        vec2 uv = p.xy / (2.0 * uArmsHalf) + 0.5;
+        return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0))) ? texture2D(uArms, uv).rg : vec2(0.0);
+    }
+
     vec3 bandLight(vec3 origin, vec3 dir) {
         // The part of the ray inside the galaxy's sphere
         float b = dot(origin, dir);
@@ -161,16 +177,8 @@ export const BAND_GLSL = /* glsl */ `
                 + uBar.w * (1.0 - smoothstep(0.8 * uBar.x, uBar.x, abs(u)))
                     * exp(-0.5 * v * v / (uBar.y * uBar.y) - az / uBar.z);
             // Arms (face-on texture)
-            vec2 uv = p.xy / (2.0 * uArmsHalf) + 0.5;
-            vec2 arm = all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))
-                ? texture2D(uArms, uv).rg : vec2(0.0);
+            vec2 arm = armTexel(p);
             float young = uArmLight.x * arm.r * exp(-0.5 * az * az / (uArmLight.y * uArmLight.y));
-            // Dust: disc (flaring, a hole inside R0 / 2) plus arm lanes
-            float hz = uDust.y + uDust.z * max(R - uDust.w, 0.0);
-            float x = R / uR0;
-            float hole = x < 0.5 ? exp(-(x - 0.5) * (x - 0.5) / 0.0625) : 1.0;
-            float dust = (exp(-(max(R, 0.5 * uR0) - uR0) / uDust.x) * hole * uDustAmp.x
-                + uDustAmp.y * arm.g) * sech2(p.z / hz);
             // The measured dust where it is (tau_V over the step), the
             // model's for the rest
             float measured = 0.0;
@@ -184,7 +192,7 @@ export const BAND_GLSL = /* glsl */ `
             }
             float modelShare = 1.0 - measuredShare(0.5 * (ha + hb));
             vec3 emit = uColDisc * disc + uColBulge * bulge + uColArms * young;
-            vec3 dtau = uDustColor * (dust * uDustAmp.z * ds * modelShare + measured);
+            vec3 dtau = uDustColor * (modelDust(p, arm.g) * ds * modelShare + measured);
             // Light from this step, dimmed by the dust in front of it and
             // (half) by its own
             light += emit * ds * exp(-tau - 0.5 * dtau);
@@ -196,8 +204,15 @@ export const BAND_GLSL = /* glsl */ `
 
 // Face-on texture of the arms: r = young-star light (line density spread
 // across the arm's width), g = dust on the inner edge (DUST_OFFSET,
-// DUST_SPREAD widths, as the 3D sprites). Half floats, so it filters.
+// DUST_SPREAD widths). Half floats, so it filters. One per galaxy.json,
+// shared by the band and the dust volume (a disposed texture uploads
+// again when next used)
+const armsTextures = new WeakMap();
 function armsTexture(data) {
+    if (!armsTextures.has(data)) armsTextures.set(data, makeArmsTexture(data));
+    return armsTextures.get(data);
+}
+function makeArmsTexture(data) {
     const n = ARMS_SIZE;
     const px = (2 * ARMS_HALF_KPC) / n;
     const light = new Float32Array(n * n);
@@ -399,6 +414,125 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = 
             skyMaterial.dispose();
             uniforms.uArms.value.dispose();
             target.dispose();
+        },
+    };
+}
+
+// The galaxy's dust as a volume in the star layer (ly), for the 3D view
+// from outside the band's reach: the same dust as the band (the model's at
+// its strength, the measured map where it is), ray-marched through a box
+// round the disc. Each channel keeps T = exp(-tau * DUST_COLOR) of the
+// light behind; blended as background * (1 - T) + behind * T, so dust
+// reddens and dims what was drawn before it (the model's glow: draw it
+// before the catalogue's stars) towards empty space, never darker.
+// Steps about DUST_VOLUME_STEP_KPC apart, at most DUST_VOLUME_STEPS
+// (spaced geometrically from the camera when it's inside the box).
+const DUST_VOLUME_HALF_KPC = [GALAXY_RADIUS_KPC, GALAXY_RADIUS_KPC, 1.5];
+const DUST_VOLUME_STEP_KPC = 0.04;
+const DUST_VOLUME_STEPS = { full: 256, lite: 96 };
+const DUST_VOLUME_NEAR_KPC = 0.002;
+
+const dustVolumeVertexShader = /* glsl */ `
+    varying vec3 vLocal;
+    void main() {
+        vLocal = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+`;
+const dustVolumeFragmentShader = /* glsl */ `
+    uniform vec3 uCamGc;       // camera, Galactocentric kpc
+    uniform vec3 uBoxHalf;
+    uniform float uFade;
+    uniform int uMaxSteps;
+    uniform float uStepKpc;
+    uniform float uNearKpc;
+    varying vec3 vLocal;
+    ${BAND_GLSL}
+    void main() {
+        vec3 dir = normalize(vLocal - uCamGc);
+        vec3 inv = 1.0 / (dir + vec3(1e-9));
+        vec3 ta = (-uBoxHalf - uCamGc) * inv;
+        vec3 tb = (uBoxHalf - uCamGc) * inv;
+        vec3 tmin = min(ta, tb), tmax = max(ta, tb);
+        float t0 = max(max(tmin.x, tmin.y), max(tmin.z, uNearKpc));
+        float t1 = min(min(tmax.x, tmax.y), tmax.z);
+        if (t1 <= t0) discard;
+        int n = int(clamp(ceil((t1 - t0) / uStepKpc), 8.0, float(uMaxSteps)));
+        float ratio = t1 / t0;
+        float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        float tauV = 0.0;
+        for (int i = 0; i < 512; i++) {
+            if (i >= n) break;
+            float ta0 = t0 * pow(ratio, float(i) / float(n));
+            float ta1 = t0 * pow(ratio, float(i + 1) / float(n));
+            float ds = ta1 - ta0;
+            vec3 p = uCamGc + dir * mix(ta0, ta1, jitter);
+            vec3 h = uGcToHel * p + uGcToHelOffset;
+            tauV += modelDust(p, armTexel(p).g) * ds * (1.0 - measuredShare(h))
+                + measuredDust(h) * ds * 1000.0 / ${DUST_MAG_PER_TAU.toFixed(6)};
+        }
+        vec3 lost = (1.0 - exp(-tauV * uDustColor)) * uFade;
+        if (max(lost.r, max(lost.g, lost.b)) < 0.002) discard;
+        gl_FragColor = vec4(lost, 1.0);
+    }
+`;
+
+// scene: the star layer's scene; dust: the measured dust (createDustMap);
+// background: the renderer's clear colour. Returns {update(cameraLy),
+// setFade(f), dispose()}
+export function buildGalaxyDust(scene, data, { lite = false, dust = null, background = new THREE.Color(0, 0, 0) } = {}) {
+    const dustMap = dust ?? createDustMap(null);
+    const toScene = sceneMatrix(data.to_scene);
+    const fromScene = toScene.clone().invert();
+    const uniforms = {
+        ...bandUniforms(data, lite),
+        ...dustMap.uniforms,
+        uCamGc: { value: new THREE.Vector3() },
+        uBoxHalf: { value: new THREE.Vector3(...DUST_VOLUME_HALF_KPC) },
+        uFade: { value: 0 },
+        uMaxSteps: { value: lite ? DUST_VOLUME_STEPS.lite : DUST_VOLUME_STEPS.full },
+        uStepKpc: { value: DUST_VOLUME_STEP_KPC },
+        uNearKpc: { value: DUST_VOLUME_NEAR_KPC },
+    };
+    const material = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: dustVolumeVertexShader,
+        fragmentShader: dustVolumeFragmentShader,
+        side: THREE.BackSide,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+        // background * (1 - T) + behind * T, per channel; alpha untouched
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.ConstantColorFactor,
+        blendDst: THREE.OneMinusSrcColorFactor,
+        blendSrcAlpha: THREE.ZeroFactor,
+        blendDstAlpha: THREE.OneFactor,
+    });
+    material.blendColor.copy(background);
+    const geometry = new THREE.BoxGeometry(...DUST_VOLUME_HALF_KPC.map(h => 2 * h));
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.matrixAutoUpdate = false;
+    mesh.matrix.copy(toScene);
+    mesh.matrixWorldNeedsUpdate = true;
+    // After the model's points (-3), before the masers (-1) and the
+    // catalogue's stars, so it dims only the glow behind
+    mesh.renderOrder = -2.5;
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    scene.add(mesh);
+    return {
+        update: (cameraLy) => {
+            mesh.visible = uniforms.uFade.value > 0;
+            if (mesh.visible) uniforms.uCamGc.value.copy(cameraLy).applyMatrix4(fromScene);
+        },
+        setFade: (f) => { uniforms.uFade.value = f; },
+        dispose: () => {
+            scene.remove(mesh);
+            geometry.dispose();
+            material.dispose();
+            if (!dust) dustMap.dispose();
         },
     };
 }
