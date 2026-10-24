@@ -14,7 +14,7 @@ import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarSource } from '../utils/farStars';
 import { createDustMap, dustMapSource } from '../utils/dustMap';
-import { buildGlobulars, decodeGlobularStars, globularInfo, globularPose } from '../utils/landmarks3d';
+import { CLUSTER_KINDS, CLUSTER_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars } from '../utils/landmarks3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -34,7 +34,7 @@ import {
     starRecord,
 } from '../utils/universe3d';
 import { RING_FEATURES, RING_FEATURES_BY_ID, ringLabelKm, ringPole, ringScaleKm, ringSubtitle } from '../utils/rings';
-import GalaxyInfoCard, { GalaxyLegend, GlobularInfoCard, MaserInfoCard } from './GalaxyInfoCard';
+import GalaxyInfoCard, { ClusterInfoCard, GalaxyLegend, MaserInfoCard } from './GalaxyInfoCard';
 import MapLegend from './MapLegend';
 import PlanetInfoCard from './PlanetInfoCard';
 import RegionInfoCard from './RegionInfoCard';
@@ -49,8 +49,9 @@ const SUN_ABS_MAG = 4.83;
 // Gaia stars beyond 100 pc (utils/farStars): the first tier loads once the
 // camera is this far from the Sun (ly), where their distances start to show
 const FAR_STARS_LOAD_LY = 30;
-// The globular clusters' stars load when the camera is this close to one (ly)
-const GLOBULAR_STARS_LOAD_LY = 2000;
+// A kind of star cluster's stars load when the camera is this close to one
+// of them (ly), and has left the Solar System
+const CLUSTER_STARS_LOAD_LY = 2000;
 const SUN_BV = 0.65;
 
 // Stars fainter than this (seen from the camera) can't be picked or labelled
@@ -406,12 +407,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [galaxyMasers, setGalaxyMasers] = useState(null);
     const [masersShown, setMasersShown] = useState(false);
     // The galaxy's landmarks (landmarks.json, fetched with galaxy.json):
-    // the globular clusters shown?, a cluster's card (its index), their
-    // data, and whether they're on screen (for the legend)
-    const [showGlobulars, setShowGlobulars] = useState(true);
-    const [selectedGlobular, setSelectedGlobular] = useState(null);
-    const [galaxyGlobulars, setGalaxyGlobulars] = useState(null);
-    const [globularsShown, setGlobularsShown] = useState(false);
+    // each kind of star cluster (CLUSTER_KINDS) shown?, a cluster's card
+    // ({kind, index}), the data, and which kinds are on screen (legend)
+    const noClusters = Object.fromEntries(CLUSTER_KINDS.map(k => [k, false]));
+    const [showClusters, setShowClusters] = useState(() => Object.fromEntries(CLUSTER_KINDS.map(k => [k, true])));
+    const [selectedCluster, setSelectedCluster] = useState(null);
+    const [landmarks, setLandmarks] = useState(null);
+    const [clustersShown, setClustersShown] = useState(noClusters);
+    const showClusterKind = (kind, on) => setShowClusters(prev => ({ ...prev, [kind]: on }));
     const galaxyDataRef = useRef(null);
     const loadGalaxyData = () => {
         if (!galaxyDataRef.current) {
@@ -429,7 +432,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     data.landmarks = marks;
                     setGalaxyCards(data.cards);
                     setGalaxyMasers(data.masers);
-                    setGalaxyGlobulars(marks?.globulars ?? null);
+                    setLandmarks(marks);
                     return data;
                 })
                 .catch(error => {
@@ -540,19 +543,20 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     sortKey: 5,
                 };
             }) : []),
-            ...(galaxyGlobulars ? galaxyGlobulars.name.map((_, i) => {
-                const info = globularInfo(galaxyGlobulars, i);
+            ...CLUSTER_KINDS.flatMap(kind => (landmarks?.[kind] ? landmarks[kind].name.map((_, i) => {
+                const info = clusterInfo(kind, landmarks[kind], i);
                 return {
-                    type: 'globular',
+                    type: 'cluster',
+                    kind,
                     id: i,
                     label: info.name,
-                    sublabel: `Globular cluster${info.title ? ` · ${info.title}` : ''}`,
+                    sublabel: `${CLUSTER_NAMES[kind][0]}${info.title ? ` · ${info.title}` : ''}`,
                     terms: info.ids.map(normalizeSearchText),
-                    sortKey: info.labelled ? -5 : 5,
+                    sortKey: info.labelled ? -5 : 15,
                 };
-            }) : []),
+            }) : [])),
         ] : []),
-        [constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies, galaxyMasers, galaxyGlobulars]
+        [constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies, galaxyMasers, landmarks]
     );
 
     const selectedHips = useMemo(
@@ -560,7 +564,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showGlobulars, showBand, showDust, showFarStars, showAllFarStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedGlobular };
+    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, showAllFarStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -568,7 +572,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         setSelectedRegion(null);
         setSelectedGalaxy(null);
         setSelectedMaser(null);
-        setSelectedGlobular(null);
+        setSelectedCluster(null);
         setSelectedStar(index);
     };
     const selectBody = (id) => {
@@ -577,7 +581,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         setSelectedRegion(null);
         setSelectedGalaxy(null);
         setSelectedMaser(null);
-        setSelectedGlobular(null);
+        setSelectedCluster(null);
         setSelectedBody(id);
     };
 
@@ -755,7 +759,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             });
         };
         // Every star Points, for the settings they share
-        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints, globularStars].filter(Boolean);
+        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints, ...Object.values(clusterStars)].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -784,33 +788,34 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // when galaxy.json arrives)
         let band = null;
         let galaxyDust = null;
-        // The globular clusters (landmarks.json), real, shown from closer
-        // in than the model; their Gaia stars (8.6 MB) once the camera is
-        // near one, or one is opened
-        let globulars = null;
-        let globularData = null;
-        let globularStars = null;
-        let globularStarsRequested = false;
+        // The star clusters (landmarks.json), each kind real, shown from
+        // closer in than the model; a kind's Gaia stars (several MB) once the
+        // camera is near one of them, or one is opened
+        const clusters = {};       // kind -> buildClusters
+        const clusterData = {};    // kind -> landmarks.json[kind]
+        const clusterStars = {};   // kind -> star Points, once loaded
+        const clusterStarsRequested = new Set();
         let disposed = false;
-        const loadGlobularStars = () => {
-            if (globularStarsRequested || !globularData?.stars) return;
-            globularStarsRequested = true;
-            fetch(`${import.meta.env.BASE_URL}data/${globularData.stars.file}`)
+        const loadClusterStars = (kind) => {
+            if (clusterStarsRequested.has(kind) || !clusterData[kind]?.stars) return;
+            clusterStarsRequested.add(kind);
+            fetch(`${import.meta.env.BASE_URL}data/${clusterData[kind].stars.file}`)
                 .then((response) => {
-                    if (!response.ok) throw new Error(`Failed to load the clusters' stars: ${response.statusText}`);
+                    if (!response.ok) throw new Error(`Failed to load the ${kind} stars: ${response.statusText}`);
                     return response.arrayBuffer();
                 })
                 .then((buffer) => {
                     if (disposed) return;
-                    const b = decodeGlobularStars(buffer, globularData);
-                    globularStars = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
-                    globularStars.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
-                    scene.add(globularStars);
+                    const b = decodeClusterStars(buffer, clusterData[kind]);
+                    const points = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
+                    points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                    clusterStars[kind] = points;
+                    scene.add(points);
                     applyBloom();
                 })
                 .catch((error) => {
                     console.error(error);
-                    globularStarsRequested = false;  // a later approach tries again
+                    clusterStarsRequested.delete(kind);  // a later approach tries again
                 });
         };
         loadGalaxyData().then((data) => {
@@ -818,9 +823,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             dust.setGalaxyFrame(data.to_scene);
             band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite, dust });
             galaxyDust = buildGalaxyDust(scene, data, { lite, dust, background: renderer.getClearColor(new THREE.Color()) });
-            if (data.landmarks?.globulars) {
-                globularData = data.landmarks.globulars;
-                globulars = buildGlobulars(scene, globularData, pixelRatio);
+            for (const kind of CLUSTER_KINDS) {
+                if (!data.landmarks?.[kind]) continue;
+                clusterData[kind] = data.landmarks[kind];
+                clusters[kind] = buildClusters(scene, kind, clusterData[kind], pixelRatio);
             }
         }).catch(error => console.error('Error loading the galaxy model:', error));
 
@@ -1122,25 +1128,29 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             return galaxy.pickMaser(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
         };
 
-        // A globular cluster under the point, or null
-        const pickGlobular = (clientX, clientY, radiusPx) => {
-            if (!globulars) return null;
+        // A star cluster under the point ({kind, index}, globulars first), or null
+        const pickCluster = (clientX, clientY, radiusPx) => {
             const rect = renderer.domElement.getBoundingClientRect();
             syncLayerCamera(starLayer, camera);
-            return globulars.pick(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
+            for (const kind of CLUSTER_KINDS) {
+                if (!clusters[kind] || !optionsRef.current.showClusters[kind]) continue;
+                const index = clusters[kind].pick(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
+                if (index !== null) return { kind, index };
+            }
+            return null;
         };
 
         // Planets win over stars: they're drawn on top. Cloud dots come
         // between, for hovering (withCloud): they have no card to open.
-        // The galaxy's masers and globular clusters come next after planets
+        // The galaxy's masers and star clusters come next after planets
         // (drawn over its stars).
         const pickAny = (clientX, clientY, radiusPx, withCloud = false) => {
             const id = pickBody(clientX, clientY, radiusPx);
             if (id !== null) return { type: 'body', id };
             const maser = pickMaser(clientX, clientY, Math.min(radiusPx, 10));
             if (maser !== null) return { type: 'maser', index: maser };
-            const globular = optionsRef.current.showGlobulars ? pickGlobular(clientX, clientY, Math.min(radiusPx, 10)) : null;
-            if (globular !== null) return { type: 'globular', index: globular };
+            const cluster = pickCluster(clientX, clientY, Math.min(radiusPx, 10));
+            if (cluster !== null) return { type: 'cluster', ...cluster };
             const dot = withCloud ? pickCloudDot(clientX, clientY, Math.min(radiusPx, 8)) : null;
             if (dot) return { type: 'cloud', ...dot };
             const index = pickStar(clientX, clientY, radiusPx);
@@ -1179,7 +1189,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const showHover = (hit) => {
             placeRing(hoverRing, hit?.type === 'star' ? positions.subarray(hit.index * 3, hit.index * 3 + 3)
                 : hit?.type === 'maser' ? galaxy.maser(hit.index).position
-                : hit?.type === 'globular' ? globulars.info(hit.index).position : null);
+                : hit?.type === 'cluster' ? clusters[hit.kind].info(hit.index).position : null);
             placeRing(bodyHoverRing, hit?.type === 'body' ? solar.byId.get(hit.id).position.toArray()
                 : hit?.type === 'cloud' ? hit.position : null);
             if (hit?.type === 'cloud') {
@@ -1208,7 +1218,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let pressedRing = null;  // ring feature id when the press began on its label
         let pressedRegion = null;  // likewise a region's (the Oort cloud's)
         let pressedGalaxy = null;  // and the galaxy's (its centre or an arm)
-        let pressedGlobular = null;  // and a globular cluster's (its index)
+        let pressedCluster = null;  // and a star cluster's ({kind, index})
         const onPointerDown = (e) => {
             downAt = { x: e.clientX, y: e.clientY };
             // Hide the hover state while dragging; it is stale once the view moves
@@ -1219,23 +1229,23 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             const ringId = pressedRing;
             const labelRegion = pressedRegion;
             const labelGalaxy = pressedGalaxy;
-            const labelGlobular = pressedGlobular;
+            const labelCluster = pressedCluster;
             pressedRing = null;
             pressedRegion = null;
             pressedGalaxy = null;
-            pressedGlobular = null;
+            pressedCluster = null;
             if (!downAt || e.button !== 0) return;
             const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
             downAt = null;
             if (moved > 5) return;
             // Ring features, the Oort cloud and the galaxy are picked by
-            // their labels (globular clusters by theirs too, or their glow)
-            const hit = ringId || labelRegion || labelGalaxy || labelGlobular !== null ? null
+            // their labels (star clusters by theirs too, or their markers)
+            const hit = ringId || labelRegion || labelGalaxy || labelCluster ? null
                 : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
             // A maser opens its arm's card (the Milky Way's if it's on none)
             setSelectedGalaxy(labelGalaxy);
             setSelectedMaser(hit?.type === 'maser' ? hit.index : null);
-            setSelectedGlobular(labelGlobular ?? (hit?.type === 'globular' ? hit.index : null));
+            setSelectedCluster(labelCluster ?? (hit?.type === 'cluster' ? { kind: hit.kind, index: hit.index } : null));
             setSelectedStar(hit?.type === 'star' ? hit.index : null);
             setSelectedBody(hit?.type === 'body' ? hit.id : null);
             setSelectedRing(ringId);
@@ -1257,7 +1267,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     tooltip.textContent = hit.type === 'star' ? starLabel(hit.index)
                         : hit.type === 'cloud' ? dotLabel(hit)
                         : hit.type === 'maser' ? galaxy.maser(hit.index).label
-                        : hit.type === 'globular' ? globulars.info(hit.index).label
+                        : hit.type === 'cluster' ? clusters[hit.kind].info(hit.index).label
                         : solar.byId.get(hit.id).name;
                     tooltip.style.display = 'block';
                     tooltip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 10}px)`;
@@ -1353,7 +1363,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         };
         makeClickable(oortLabel.el, () => { pressedRegion = 'oort'; });
         let galaxyLabels = [];
-        let globularLabels = null;  // made once the clusters are in
+        const clusterLabels = {};  // kind -> labels, made once that kind is in
         // Body and ring label sizes (px) for the overlap tests, measured
         // together once the view is laid out
         let labelsMeasured = false;
@@ -1490,21 +1500,24 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     label.selected = selected;
                 }
             }
-            // The named globular clusters (Messier, or a common name)
-            if (globulars && !globularLabels) {
-                globularLabels = globulars.labels().map(l => {
-                    const el = makeLabelEl(l.name, 'universe-3d-label universe-3d-label-link');
-                    makeClickable(el, () => { pressedGlobular = l.index; });
-                    return { index: l.index, position: l.position, el, shown: false, selected: false };
-                });
-            }
-            const globularLabelsOn = opts.showLabels && opts.showGlobulars && (globulars?.fade() ?? 0) > 0.3;
-            for (const label of globularLabels ?? []) {
-                setLabel(label, globularLabelsOn ? toScreen(label.position, width, height) : null, 8, -8);
-                const selected = opts.selectedGlobular === label.index;
-                if (selected !== label.selected) {
-                    label.el.classList.toggle('selected', selected);
-                    label.selected = selected;
+            // The named star clusters (Messier, or a common name)
+            for (const kind of CLUSTER_KINDS) {
+                if (!clusters[kind]) continue;
+                if (!clusterLabels[kind]) {
+                    clusterLabels[kind] = clusters[kind].labels().map(l => {
+                        const el = makeLabelEl(l.name, 'universe-3d-label universe-3d-label-link');
+                        makeClickable(el, () => { pressedCluster = { kind, index: l.index }; });
+                        return { index: l.index, position: l.position, el, shown: false, selected: false };
+                    });
+                }
+                const on = opts.showLabels && opts.showClusters[kind] && clusters[kind].fade() > 0.3;
+                for (const label of clusterLabels[kind]) {
+                    setLabel(label, on ? toScreen(label.position, width, height) : null, 8, -8);
+                    const selected = opts.selectedCluster?.kind === kind && opts.selectedCluster.index === label.index;
+                    if (selected !== label.selected) {
+                        label.el.classList.toggle('selected', selected);
+                        label.selected = selected;
+                    }
                 }
             }
             // Body labels go up and right of the body, in priority order (see
@@ -1674,7 +1687,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let galaxyWasShown = false;
         let cloudWasShown = false;
         let masersWereShown = false;
-        let globularsWereShown = false;
+        let clustersWereShown = noClusters;
         const animate = (now) => {
             advanceClock(now);
             updateFlight(now);
@@ -1718,18 +1731,27 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             }
             galaxyDust?.setFade(galaxy.fade() * (1 - (band ? band.fade() : 0)));
             galaxyDust?.update(camera.position);
-            const globularsWanted = optionsRef.current.showGalaxy && optionsRef.current.showGlobulars;
-            globulars?.setVisible(globularsWanted);
-            globulars?.update(camera.position, mount.clientHeight, camera.fov);
-            // Their stars: loaded once near one (or one is opened)
-            if (globulars && globularsWanted && (optionsRef.current.selectedGlobular !== null
-                || globulars.nearest(camera.position) < GLOBULAR_STARS_LOAD_LY)) loadGlobularStars();
-            if (globularStars) globularStars.visible = globularsWanted;
-            globulars?.setStarsOn(Boolean(globularStars?.visible));
-            const globularsNow = (globulars?.fade() ?? 0) > 0.3;
-            if (globularsNow !== globularsWereShown) {
-                globularsWereShown = globularsNow;
-                setGlobularsShown(globularsNow);
+            // The star clusters; each kind's stars loaded once near one of
+            // them out of the Solar System (or one is opened)
+            const clustersNow = {};
+            for (const kind of CLUSTER_KINDS) {
+                const c = clusters[kind];
+                clustersNow[kind] = false;
+                if (!c) continue;
+                const wanted = optionsRef.current.showGalaxy && optionsRef.current.showClusters[kind];
+                c.setVisible(wanted);
+                c.update(camera.position, mount.clientHeight, camera.fov);
+                if (wanted && (optionsRef.current.selectedCluster?.kind === kind
+                    || (camera.position.length() > FAR_STARS_LOAD_LY && c.nearest(camera.position) < CLUSTER_STARS_LOAD_LY))) {
+                    loadClusterStars(kind);
+                }
+                if (clusterStars[kind]) clusterStars[kind].visible = wanted;
+                c.setStarsOn(Boolean(clusterStars[kind]?.visible));
+                clustersNow[kind] = c.fade() > 0.3;
+            }
+            if (CLUSTER_KINDS.some(k => clustersNow[k] !== clustersWereShown[k])) {
+                clustersWereShown = clustersNow;
+                setClustersShown(clustersNow);
             }
             // Legends follow what they explain (React state only on a change)
             const shown = galaxy.fade() > 0.3;
@@ -1790,7 +1812,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             canvas.removeEventListener('pointerleave', onPointerLeave);
             controls.dispose();
             farDisposed = true;
-            [stars, gaiaStars, gaiaFaint, sun, ...farPoints, globularStars, hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
+            [stars, gaiaStars, gaiaFaint, sun, ...farPoints, ...Object.values(clusterStars), hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
                 .forEach(disposeObject);
             solar?.dispose();
             cloud?.dispose();
@@ -1799,7 +1821,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             disposed = true;
             band?.dispose();
             galaxyDust?.dispose();
-            globulars?.dispose();
+            Object.values(clusters).forEach(c => c.dispose());
             dust.dispose();
             starDisc.dispose();
             bloomPass.dispose();
@@ -1944,22 +1966,22 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         }).catch(error => console.error('Error loading the galaxy model:', error));
     };
 
-    // A globular cluster's card, without moving
-    const selectGlobular = (index) => {
+    // A star cluster's card, without moving
+    const selectCluster = (kind, index) => {
         selectStar(null);
-        setSelectedGlobular(index);
+        setSelectedCluster({ kind, index });
     };
-    // Fly to a globular cluster and open its card
-    const viewGlobular = (index) => {
+    // Fly to a star cluster and open its card
+    const viewCluster = (kind, index) => {
         const s = sceneRef.current;
         if (!s) return;
         setShowGalaxy(true);
-        setShowGlobulars(true);
-        selectGlobular(index);
-        setFocus({ type: 'globular', index });
+        showClusterKind(kind, true);
+        selectCluster(kind, index);
+        setFocus({ type: 'cluster', kind, index });
         loadGalaxyData().then((data) => {
-            if (sceneRef.current !== s || !data.landmarks?.globulars) return;
-            const pose = globularPose(data.landmarks.globulars, index);
+            if (sceneRef.current !== s || !data.landmarks?.[kind]) return;
+            const pose = clusterPose(kind, data.landmarks[kind], index);
             s.setFollow(null);
             s.flyTo(pose.position, pose.target, pose.minDistance);
         }).catch(error => console.error('Error loading the galaxy model:', error));
@@ -1970,8 +1992,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             viewGalaxy(item.id);
         } else if (item.type === 'maser') {
             viewMaser(item.id);
-        } else if (item.type === 'globular') {
-            viewGlobular(item.id);
+        } else if (item.type === 'cluster') {
+            viewCluster(item.kind, item.id);
         } else if (item.type === 'region') {
             viewRegion(item.id);
         } else if (item.type === 'constellation') {
@@ -2168,11 +2190,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const i = selectedStar;
         placeRing(s.selectedRing, i !== null ? starBuffers.positions.subarray(i * 3, i * 3 + 3)
             : selectedMaser !== null && galaxyMasers ? galaxyMasers.xyz_ly.slice(selectedMaser * 3, selectedMaser * 3 + 3)
-            : selectedGlobular !== null && galaxyGlobulars ? galaxyGlobulars.xyz_ly.slice(selectedGlobular * 3, selectedGlobular * 3 + 3) : null);
+            : selectedCluster && landmarks?.[selectedCluster.kind]
+                ? landmarks[selectedCluster.kind].xyz_ly.slice(selectedCluster.index * 3, selectedCluster.index * 3 + 3) : null);
         placeRing(s.bodySelectedRing, selectedBody && s.solar ? s.solar.byId.get(selectedBody).position.toArray() : null);
         s.selectedBodyId = selectedBody;  // the render loop keeps the ring on it as time runs
         s.solar?.setHighlightOrbit(selectedBody);
-    }, [selectedStar, selectedBody, selectedMaser, galaxyMasers, selectedGlobular, galaxyGlobulars, starBuffers, planetFacts, moonsData]);
+    }, [selectedStar, selectedBody, selectedMaser, galaxyMasers, selectedCluster, landmarks, starBuffers, planetFacts, moonsData]);
 
     // Keyboard: Esc closes the card and clears the selection (it never leaves
     // the 3D view: the Back button does). L lines, N names, R reset.
@@ -2213,7 +2236,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const body = selectedBody !== null && solar ? solar.byId.get(selectedBody) : null;
     const ring = selectedRing !== null ? RING_FEATURES_BY_ID.get(selectedRing) : null;
     const maser = selectedMaser !== null && galaxyMasers && galaxyCards ? maserInfo(galaxyMasers, selectedMaser) : null;
-    const globular = selectedGlobular !== null && galaxyGlobulars ? globularInfo(galaxyGlobulars, selectedGlobular) : null;
+    const cluster = selectedCluster && landmarks?.[selectedCluster.kind]
+        ? clusterInfo(selectedCluster.kind, landmarks[selectedCluster.kind], selectedCluster.index) : null;
     // Current distances (AU), for the card
     const bodyDistances = body && {
         sun: body.position.length(),
@@ -2263,10 +2287,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const info = maserInfo(galaxyMasers, focus.index);
         title = info.name;
         subtitle = `Maser · ${info.armName}`;
-    } else if (focus.type === 'globular' && galaxyGlobulars) {
-        const info = globularInfo(galaxyGlobulars, focus.index);
+    } else if (focus.type === 'cluster' && landmarks?.[focus.kind]) {
+        const info = clusterInfo(focus.kind, landmarks[focus.kind], focus.index);
         title = info.name;
-        subtitle = `Globular cluster${info.title ? ` · ${info.title}` : ''}`;
+        subtitle = `${CLUSTER_NAMES[focus.kind][0]}${info.title ? ` · ${info.title}` : ''}`;
     } else if (focus.type === 'ring') {
         const f = RING_FEATURES_BY_ID.get(focus.id);
         title = f.name;
@@ -2279,7 +2303,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     }
 
     return (
-        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser || globular ? 'has-card' : ''} ${legendsShifted ? 'legends-shifted' : ''}`}>
+        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser || cluster ? 'has-card' : ''} ${legendsShifted ? 'legends-shifted' : ''}`}>
             <div className="universe-3d-canvas" ref={mountRef} />
             <div className="universe-3d-labels" ref={labelsRef} />
             <div className="universe-3d-tooltip" ref={tooltipRef} />
@@ -2496,12 +2520,25 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 >
                     <input
                         type="checkbox"
-                        checked={showGlobulars}
+                        checked={showClusters.globulars}
                         disabled={!showGalaxy}
-                        onChange={(e) => setShowGlobulars(e.target.checked)}
+                        onChange={(e) => showClusterKind('globulars', e.target.checked)}
                     />
                     <span className="universe-3d-swatch" style={{ background: '#ffe2ad' }} />
                     Globular clusters (measured)
+                </label>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                    title="4,000 open clusters found in Gaia DR3 (Hunt & Reffert 2023), at their measured distances, coloured by age: blue young, orange old. Real, not part of the drawing"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showClusters.open_clusters}
+                        disabled={!showGalaxy}
+                        onChange={(e) => showClusterKind('open_clusters', e.target.checked)}
+                    />
+                    <span className="universe-3d-swatch" style={{ background: 'linear-gradient(90deg, #9fc4ff, #ffe0a0, #ff9e60)' }} />
+                    Open clusters (measured)
                 </label>
                 <label
                     className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
@@ -2626,12 +2663,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     <MapLegend title="Asteroids & comets" storageKey="universe3d.legend.cloud" items={cloudLegendItems} />
                 )}
                 {/* (the galaxy's cards have their own key) */}
-                {(galaxyShown || masersShown || globularsShown) && !(selectedGalaxy && galaxyCards) && (
+                {(galaxyShown || masersShown || CLUSTER_KINDS.some(k => clustersShown[k])) && !(selectedGalaxy && galaxyCards) && (
                     <GalaxyLegend
                         showModel={galaxyShown}
                         showMasers={masersShown}
                         showRanges={linesOn('maserRanges')}
-                        showGlobulars={globularsShown}
+                        showGlobulars={clustersShown.globulars}
+                        showOpenClusters={clustersShown.open_clusters}
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
                 )}
@@ -2655,12 +2693,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     onClose={() => setSelectedMaser(null)}
                 />
             )}
-            {globular && (
-                <GlobularInfoCard
-                    info={globular}
-                    text={galaxyGlobulars}
-                    onView={() => viewGlobular(globular.index)}
-                    onClose={() => setSelectedGlobular(null)}
+            {cluster && (
+                <ClusterInfoCard
+                    info={cluster}
+                    text={landmarks[cluster.kind]}
+                    onView={() => viewCluster(cluster.kind, cluster.index)}
+                    onClose={() => setSelectedCluster(null)}
                 />
             )}
             {ring && (

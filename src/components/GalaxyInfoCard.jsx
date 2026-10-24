@@ -1,6 +1,6 @@
 import React from 'react';
 import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
-import { GLOBULAR_COLOR } from '../utils/landmarks3d';
+import { CLUSTER_NAMES, GLOBULAR_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
 import MapLegend from './MapLegend';
 
 // The Milky Way model's cards: the galaxy as a whole (with the key to the
@@ -22,6 +22,7 @@ export const GALAXY_KEY = [
     { color: '#15110d', name: 'Dust', about: 'Grains of rock and soot that block light, thickest along the inner edge of each arm and in the middle of the disc. Within about 15,000 ly of the Sun it is the measured 3D map (below), not drawn to match.' },
     { color: hex(MASER_COLOR), ring: true, name: 'Masers', about: 'Real, not drawn to match: the measured masers at their distances. The faint line through each spans its distance\'s uncertainty, along our line of sight (cut at twice the distance when the far end is open).' },
     { color: hex(GLOBULAR_COLOR), globular: true, name: 'Globular clusters', about: 'Real, not drawn to match: 167 globular clusters at their measured distances, balls of hundreds of thousands of stars swarming round the centre in a halo, far above and below the disc. Each glows out to its true size when you get close.' },
+    { gradient: OPEN_AGE_COLORS.map(([, c]) => hex(c)), open: true, name: 'Open clusters', about: 'Real, not drawn to match: 4,000 open clusters found by Gaia, at their measured distances, coloured by age: blue for the young ones (a few million years), white, yellow, then orange for the old (billions). The youngest trace the spiral arms they formed in.' },
 ];
 
 // A key swatch: a dot, a ring for the masers' markers, or a short line
@@ -29,6 +30,7 @@ export const GALAXY_KEY = [
 export function KeySwatch({ k }) {
     if (k.line) return <span className="galaxy-legend-line" style={{ background: k.color }} />;
     if (k.band) return <span className="galaxy-legend-band" />;
+    if (k.gradient) return <span className="universe-3d-swatch" style={{ background: `linear-gradient(90deg, ${k.gradient.join(', ')})` }} />;
     const style = k.ring
         ? { background: 'transparent', border: `2px solid ${k.color}` }
         : { background: k.color, border: k.name === 'Dust' ? '1px solid #64748b' : undefined };
@@ -38,16 +40,18 @@ export function KeySwatch({ k }) {
 // The on-screen legend, shown while the model is: short names; the card
 // (onOpen) has the explanations. Masers' entries only while they're shown.
 const LEGEND = [
-    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.globular),
+    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.globular && !k.open),
     { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
     { ...GALAXY_KEY.find(k => k.globular), name: 'Globular clusters (measured)' },
+    { ...GALAXY_KEY.find(k => k.open), name: 'Open clusters, young → old (measured)' },
 ];
 // showModel: the model is on screen; showMasers: its masers are (they
 // fade in before the model does); showRanges: their distance ranges are
-// drawn; showGlobulars: the globular clusters are
-export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, onOpen }) {
-    const shown = (k) => (k.globular ? showGlobulars : k.maser ? showMasers && (!k.line || showRanges) : showModel);
+// drawn; showGlobulars / showOpenClusters: those clusters are
+export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, showOpenClusters = false, onOpen }) {
+    const shown = (k) => (k.globular ? showGlobulars : k.open ? showOpenClusters
+        : k.maser ? showMasers && (!k.line || showRanges) : showModel);
     return (
         <MapLegend
             title="Milky Way (model)"
@@ -318,32 +322,46 @@ export function MaserInfoCard({ info, cards, onArm, onView, onClose }) {
     );
 }
 
-// A globular cluster's card. info: landmarks3d globularInfo; text: the
-// globulars' about and refs (landmarks.json)
-export function GlobularInfoCard({ info, text, onView, onClose }) {
+// A star cluster's card. info: landmarks3d clusterInfo; text: that kind's
+// about and refs (landmarks.json)
+export function ClusterInfoCard({ info, text, onView, onClose }) {
     const ly = (n) => fmt(roundSig(n, 3));
+    const myr = (m) => (m >= 1000 ? `${roundSig(m / 1000, 2)} billion` : `${roundSig(m, 2)} million`);
+    const rows = info.kind === 'globulars' ? [
+        ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">± {ly(info.distanceErr)} ly</span></>],
+        ['From the centre', `${ly(info.rGc)} ly`],
+        info.mass && ['Mass', `about ${fmt(roundSig(info.mass, 2))} Suns`],
+        info.rh && ['Size', <>half its light within {ly(info.rh)} ly of the middle
+            {info.rt && <div className="star-info-muted">its gravity holds stars out to about {ly(info.rt)} ly (tidal radius)</div>}</>],
+        info.vmag !== null && ['In our sky', <>magnitude {info.vmag.toFixed(1)}
+            <span className="star-info-muted">{info.vmag <= 6 ? ' · visible to the naked eye from a dark site' : ' · binoculars or a telescope'}</span>
+            <div>{info.constellation}</div></>],
+        info.starCount > 0 && ['Stars drawn', <>{fmt(info.starCount)} real ones, measured by Gaia
+            <div className="star-info-muted">
+                {info.resolved !== null && `holding ${Math.round(info.resolved * 100)}% of its light; `}
+                the glow is the rest: stars too faint for Gaia, or too crowded in the core to pick out. Each sits at its place in the sky; its depth is drawn from the cluster&apos;s measured profile
+            </div></>],
+    ] : [
+        ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">likely {ly(info.distanceRange[0])}–{ly(info.distanceRange[1])} ly</span></>],
+        info.age && ['Age', <>about {myr(info.age)} years
+            {info.ageRange && <span className="star-info-muted"> · likely {myr(info.ageRange[0])}–{myr(info.ageRange[1])}</span>}</>],
+        ['Stars', <>{fmt(info.members)} found by Gaia
+            {info.r50 && <div className="star-info-muted">half of them within {ly(info.r50)} ly of the middle{info.rt ? `, held out to about ${ly(info.rt)} ly` : ''}</div>}</>],
+        info.av !== null && ['Dust in front', `${info.av.toFixed(1)} mag (dims it ${Math.round((1 - 10 ** (-0.4 * info.av)) * 100)}% to the eye)`],
+        ['In our sky', info.constellation],
+        info.starCount > 0 && ['Stars drawn', <>{fmt(info.starCount)} measured by Gaia, besides any already among the catalogue&apos;s stars
+            <div className="star-info-muted">
+                each at its own measured distance where that&apos;s precise enough (nearby clusters keep their real shape); else at the cluster&apos;s, with a depth drawn from its size
+            </div></>],
+    ];
     return (
         <div className="star-info region-info">
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             <h3 className="star-info-title">{info.name}</h3>
-            <div className="star-info-subtitle">Globular cluster{info.title ? ` · ${info.title}` : ''}</div>
+            <div className="star-info-subtitle">{CLUSTER_NAMES[info.kind][0]}{info.title ? ` · ${info.title}` : ''}</div>
             {info.superlative && <p className="star-info-origin"><strong>{info.superlative}.</strong></p>}
             {info.note && <p className="star-info-origin">{info.note}</p>}
-            <Facts rows={[
-                ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">± {ly(info.distanceErr)} ly</span></>],
-                ['From the centre', `${ly(info.rGc)} ly`],
-                info.mass && ['Mass', `about ${fmt(roundSig(info.mass, 2))} Suns`],
-                info.rh && ['Size', <>half its light within {ly(info.rh)} ly of the middle
-                    {info.rt && <div className="star-info-muted">its gravity holds stars out to about {ly(info.rt)} ly (tidal radius)</div>}</>],
-                info.vmag !== null && ['In our sky', <>magnitude {info.vmag.toFixed(1)}
-                    <span className="star-info-muted">{info.vmag <= 6 ? ' · visible to the naked eye from a dark site' : ' · binoculars or a telescope'}</span>
-                    <div>{info.constellation}</div></>],
-                info.starCount > 0 && ['Stars drawn', <>{fmt(info.starCount)} real ones, measured by Gaia
-                    <div className="star-info-muted">
-                        {info.resolved !== null && `holding ${Math.round(info.resolved * 100)}% of its light; `}
-                        the glow is the rest: stars too faint for Gaia, or too crowded in the core to pick out. Each sits at its place in the sky; its depth is drawn from the cluster&apos;s measured profile
-                    </div></>],
-            ]} />
+            <Facts rows={rows} />
             <p className="star-info-muted star-info-origin">{text.about}</p>
             <Sources refs={[...text.refs, info.starCount > 0 && info.starsRef, info.noteRef]} />
             <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>

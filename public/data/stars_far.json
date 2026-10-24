@@ -17,12 +17,12 @@
  "tiers": [
   {
    "file": "stars_far_0.bin",
-   "count": 1516283,
+   "count": 1505264,
    "g_max": 11.5
   },
   {
    "file": "stars_far_1.bin",
-   "count": 4280645,
+   "count": 4260529,
    "g_max": 13.0
   }
  ]
