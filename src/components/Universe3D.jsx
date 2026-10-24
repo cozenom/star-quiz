@@ -1491,34 +1491,64 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     return { id: l.id, position: l.position, el, shown: false, selected: false };
                 });
             }
+            // Galaxy and cluster labels don't overlap: the galaxy's (centred)
+            // first, then the clusters', each only where it hits none placed
+            // before
+            const skyBoxes = [];
+            const hitsSky = (a) => skyBoxes.some(b =>
+                a.x < b.x + b.w + LABEL_GAP_PX && b.x < a.x + a.w + LABEL_GAP_PX && a.y < b.y + b.h && b.y < a.y + a.h);
+            const measure = (label) => {
+                if (label.w) return;
+                label.el.style.display = 'block';
+                label.w = label.el.offsetWidth;
+                label.h = label.el.offsetHeight;
+                label.el.style.display = label.shown ? 'block' : 'none';
+            };
             const galaxyLabelsOn = opts.showLabels && galaxy.fade() > 0.3;
             for (const label of galaxyLabels) {
-                setLabel(label, galaxyLabelsOn ? toScreen(label.position, width, height) : null, 0, 0);
+                const p = galaxyLabelsOn ? toScreen(label.position, width, height) : null;
+                if (p) {
+                    measure(label);
+                    skyBoxes.push({ x: p[0] - label.w / 2, y: p[1] - label.h / 2, w: label.w, h: label.h });
+                }
+                setLabel(label, p, 0, 0);
                 const selected = opts.selectedGalaxy === label.id;
                 if (selected !== label.selected) {
                     label.el.classList.toggle('selected', selected);
                     label.selected = selected;
                 }
             }
-            // The named star clusters (Messier, or a common name)
+            // The named star clusters (Messier, or a common name): the
+            // selected one first, then the nearest to the camera
+            const clusterCandidates = [];
             for (const kind of CLUSTER_KINDS) {
                 if (!clusters[kind]) continue;
                 if (!clusterLabels[kind]) {
                     clusterLabels[kind] = clusters[kind].labels().map(l => {
                         const el = makeLabelEl(l.name, 'universe-3d-label universe-3d-label-link');
                         makeClickable(el, () => { pressedCluster = { kind, index: l.index }; });
-                        return { index: l.index, position: l.position, el, shown: false, selected: false };
+                        return { index: l.index, position: l.position, el, shown: false, selected: false, w: 0, h: 0 };
                     });
                 }
                 const on = opts.showLabels && opts.showClusters[kind] && clusters[kind].fade() > 0.3;
                 for (const label of clusterLabels[kind]) {
-                    setLabel(label, on ? toScreen(label.position, width, height) : null, 8, -8);
                     const selected = opts.selectedCluster?.kind === kind && opts.selectedCluster.index === label.index;
                     if (selected !== label.selected) {
                         label.el.classList.toggle('selected', selected);
                         label.selected = selected;
                     }
+                    const p = on ? toScreen(label.position, width, height) : null;
+                    if (p) clusterCandidates.push({ label, p, selected, d: label.position.distanceToSquared(starCamera.position) });
+                    else setLabel(label, null, 0, 0);
                 }
+            }
+            clusterCandidates.sort((a, b) => b.selected - a.selected || a.d - b.d);
+            for (const { label, p, selected } of clusterCandidates) {
+                measure(label);
+                const box = { x: p[0] + 8, y: p[1] - 8, w: label.w, h: label.h };
+                const free = selected || !hitsSky(box);
+                if (free) skyBoxes.push(box);
+                setLabel(label, free ? [box.x, box.y] : null, 0, 0);
             }
             // Body labels go up and right of the body, in priority order (see
             // sortBodyLabels), each only where it overlaps none placed before.
