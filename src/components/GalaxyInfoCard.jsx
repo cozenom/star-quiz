@@ -1,6 +1,6 @@
 import React from 'react';
 import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
-import { CLUSTER_NAMES, GLOBULAR_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
+import { LANDMARK_NAMES, GLOBULAR_COLOR, NEBULA_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
 import MapLegend from './MapLegend';
 
 // The Milky Way model's cards: the galaxy as a whole (with the key to the
@@ -22,6 +22,7 @@ export const GALAXY_KEY = [
     { color: '#15110d', name: 'Dust', about: 'Grains of rock and soot that block light, thickest along the inner edge of each arm and in the middle of the disc. Within about 15,000 ly of the Sun it is the measured 3D map (below), not drawn to match.' },
     { color: hex(MASER_COLOR), ring: true, name: 'Masers', about: 'Real, not drawn to match: the measured masers at their distances. The faint line through each spans its distance\'s uncertainty, along our line of sight (cut at twice the distance when the far end is open).' },
     { color: hex(GLOBULAR_COLOR), globular: true, name: 'Globular clusters', about: 'Real, not drawn to match: 167 globular clusters at their measured distances, balls of hundreds of thousands of stars swarming round the centre in a halo, far above and below the disc. Each glows out to its true size when you get close.' },
+    { color: hex(NEBULA_COLOR), nebula: true, name: 'Nebulae', about: 'Real, not drawn to match: the few nebulae whose 3D shape has been measured, each drawn from its published model at its measured distance. A dot from afar; fly close to see its shape: glowing gas, or dust lit by its star.' },
     { gradient: OPEN_AGE_COLORS.map(([, c]) => hex(c)), open: true, name: 'Open clusters', about: 'Real, not drawn to match: 4,000 open clusters found by Gaia, at their measured distances, coloured by age: blue for the young ones (a few million years), white, yellow, then orange for the old (billions). The youngest trace the spiral arms they formed in.' },
 ];
 
@@ -40,17 +41,18 @@ export function KeySwatch({ k }) {
 // The on-screen legend, shown while the model is: short names; the card
 // (onOpen) has the explanations. Masers' entries only while they're shown.
 const LEGEND = [
-    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.globular && !k.open),
+    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.globular && !k.open && !k.nebula),
     { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
     { ...GALAXY_KEY.find(k => k.globular), name: 'Globular clusters (measured)' },
     { ...GALAXY_KEY.find(k => k.open), name: 'Open clusters, young → old (measured)' },
+    { ...GALAXY_KEY.find(k => k.nebula), name: 'Nebulae in 3D (measured)' },
 ];
 // showModel: the model is on screen; showMasers: its masers are (they
 // fade in before the model does); showRanges: their distance ranges are
-// drawn; showGlobulars / showOpenClusters: those clusters are
-export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, showOpenClusters = false, onOpen }) {
-    const shown = (k) => (k.globular ? showGlobulars : k.open ? showOpenClusters
+// drawn; showGlobulars / showOpenClusters / showNebulae: those landmarks are
+export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, showOpenClusters = false, showNebulae = false, onOpen }) {
+    const shown = (k) => (k.globular ? showGlobulars : k.open ? showOpenClusters : k.nebula ? showNebulae
         : k.maser ? showMasers && (!k.line || showRanges) : showModel);
     return (
         <MapLegend
@@ -322,12 +324,20 @@ export function MaserInfoCard({ info, cards, onArm, onView, onClose }) {
     );
 }
 
-// A star cluster's card. info: landmarks3d clusterInfo; text: that kind's
-// about and refs (landmarks.json)
+// A landmark's card (star cluster or nebula). info: landmarks3d
+// clusterInfo; text: that kind's about and refs (landmarks.json)
 export function ClusterInfoCard({ info, text, onView, onClose }) {
     const ly = (n) => fmt(roundSig(n, 3));
     const myr = (m) => (m >= 1000 ? `${roundSig(m / 1000, 2)} billion` : `${roundSig(m, 2)} million`);
-    const rows = info.kind === 'globulars' ? [
+    const size = (n) => (n < 10 ? roundSig(n, 2).toLocaleString() : ly(n));
+    const rows = info.kind === 'nebulae' ? [
+        ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">± {ly(info.distanceErr)} ly</span></>],
+        ['Size', `${size(2 * info.radius)} ly across`],
+        ['In our sky', info.constellation],
+        // (a model drawn as several parts, e.g. a cloud's points and its haze: once)
+        ...info.models.filter((m, k, all) => all.findIndex(o => o.name === m.name) === k).map(m => [m.name, <>{m.shape[0].toUpperCase() + m.shape.slice(1)}
+            {m.unknown && <div className="star-info-muted">{m.unknown}</div>}</>]),
+    ] : info.kind === 'globulars' ? [
         ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">± {ly(info.distanceErr)} ly</span></>],
         ['From the centre', `${ly(info.rGc)} ly`],
         info.mass && ['Mass', `about ${fmt(roundSig(info.mass, 2))} Suns`],
@@ -358,12 +368,13 @@ export function ClusterInfoCard({ info, text, onView, onClose }) {
         <div className="star-info region-info">
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             <h3 className="star-info-title">{info.name}</h3>
-            <div className="star-info-subtitle">{CLUSTER_NAMES[info.kind][0]}{info.title ? ` · ${info.title}` : ''}</div>
+            <div className="star-info-subtitle">{LANDMARK_NAMES[info.kind][0]}{info.title ? ` · ${info.title}` : ''}</div>
             {info.superlative && <p className="star-info-origin"><strong>{info.superlative}.</strong></p>}
             {info.note && <p className="star-info-origin">{info.note}</p>}
+            {info.about && <p className="star-info-origin">{info.about}</p>}
             <Facts rows={rows} />
             <p className="star-info-muted star-info-origin">{text.about}</p>
-            <Sources refs={[...text.refs, info.starCount > 0 && info.starsRef, info.noteRef]} />
+            <Sources refs={[...text.refs, ...(info.refs ?? []), info.starCount > 0 && info.starsRef, info.noteRef]} />
             <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
         </div>
     );

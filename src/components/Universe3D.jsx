@@ -14,7 +14,7 @@ import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarSource } from '../utils/farStars';
 import { createDustMap, dustMapSource } from '../utils/dustMap';
-import { CLUSTER_KINDS, CLUSTER_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars } from '../utils/landmarks3d';
+import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars } from '../utils/landmarks3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -407,10 +407,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [galaxyMasers, setGalaxyMasers] = useState(null);
     const [masersShown, setMasersShown] = useState(false);
     // The galaxy's landmarks (landmarks.json, fetched with galaxy.json):
-    // each kind of star cluster (CLUSTER_KINDS) shown?, a cluster's card
+    // each kind (LANDMARK_KINDS: star clusters, nebulae) shown?, one's card
     // ({kind, index}), the data, and which kinds are on screen (legend)
-    const noClusters = Object.fromEntries(CLUSTER_KINDS.map(k => [k, false]));
-    const [showClusters, setShowClusters] = useState(() => Object.fromEntries(CLUSTER_KINDS.map(k => [k, true])));
+    const noClusters = Object.fromEntries(LANDMARK_KINDS.map(k => [k, false]));
+    const [showClusters, setShowClusters] = useState(() => Object.fromEntries(LANDMARK_KINDS.map(k => [k, true])));
     const [selectedCluster, setSelectedCluster] = useState(null);
     const [landmarks, setLandmarks] = useState(null);
     const [clustersShown, setClustersShown] = useState(noClusters);
@@ -543,14 +543,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     sortKey: 5,
                 };
             }) : []),
-            ...CLUSTER_KINDS.flatMap(kind => (landmarks?.[kind] ? landmarks[kind].name.map((_, i) => {
+            ...LANDMARK_KINDS.flatMap(kind => (landmarks?.[kind] ? landmarks[kind].name.map((_, i) => {
                 const info = clusterInfo(kind, landmarks[kind], i);
                 return {
                     type: 'cluster',
                     kind,
                     id: i,
                     label: info.name,
-                    sublabel: `${CLUSTER_NAMES[kind][0]}${info.title ? ` · ${info.title}` : ''}`,
+                    sublabel: `${LANDMARK_NAMES[kind][0]}${info.title ? ` · ${info.title}` : ''}`,
                     terms: info.ids.map(normalizeSearchText),
                     sortKey: info.labelled ? -5 : 15,
                 };
@@ -788,25 +788,32 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // when galaxy.json arrives)
         let band = null;
         let galaxyDust = null;
-        // The star clusters (landmarks.json), each kind real, shown from
-        // closer in than the model; a kind's Gaia stars (several MB) once the
-        // camera is near one of them, or one is opened
+        // The landmarks (landmarks.json): star clusters and nebulae, each
+        // kind real, shown from closer in than the model; a kind's Gaia stars
+        // (several MB), or the nebulae's models, once the camera is near one
+        // of them, or one is opened
         const clusters = {};       // kind -> buildClusters
         const clusterData = {};    // kind -> landmarks.json[kind]
         const clusterStars = {};   // kind -> star Points, once loaded
         const clusterStarsRequested = new Set();
         let disposed = false;
         const loadClusterStars = (kind) => {
-            if (clusterStarsRequested.has(kind) || !clusterData[kind]?.stars) return;
+            const g = clusterData[kind];
+            const files = kind === 'nebulae' ? (g?.models.flat().map(m => m.file) ?? []) : [g?.stars?.file];
+            if (clusterStarsRequested.has(kind) || !files.some(Boolean)) return;
             clusterStarsRequested.add(kind);
-            fetch(`${import.meta.env.BASE_URL}data/${clusterData[kind].stars.file}`)
+            Promise.all(files.map(file => file && fetch(`${import.meta.env.BASE_URL}data/${file}`)
                 .then((response) => {
-                    if (!response.ok) throw new Error(`Failed to load the ${kind} stars: ${response.statusText}`);
+                    if (!response.ok) throw new Error(`Failed to load ${file}: ${response.statusText}`);
                     return response.arrayBuffer();
-                })
-                .then((buffer) => {
+                })))
+                .then((buffers) => {
                     if (disposed) return;
-                    const b = decodeClusterStars(buffer, clusterData[kind]);
+                    if (kind === 'nebulae') {
+                        clusters[kind].addModels(buffers);
+                        return;
+                    }
+                    const b = decodeClusterStars(buffers[0], g);
                     const points = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
                     points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
                     clusterStars[kind] = points;
@@ -823,7 +830,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             dust.setGalaxyFrame(data.to_scene);
             band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite, dust });
             galaxyDust = buildGalaxyDust(scene, data, { lite, dust, background: renderer.getClearColor(new THREE.Color()) });
-            for (const kind of CLUSTER_KINDS) {
+            for (const kind of LANDMARK_KINDS) {
                 if (!data.landmarks?.[kind]) continue;
                 clusterData[kind] = data.landmarks[kind];
                 clusters[kind] = buildClusters(scene, kind, clusterData[kind], pixelRatio);
@@ -1132,7 +1139,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const pickCluster = (clientX, clientY, radiusPx) => {
             const rect = renderer.domElement.getBoundingClientRect();
             syncLayerCamera(starLayer, camera);
-            for (const kind of CLUSTER_KINDS) {
+            for (const kind of LANDMARK_KINDS) {
                 if (!clusters[kind] || !optionsRef.current.showClusters[kind]) continue;
                 const index = clusters[kind].pick(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
                 if (index !== null) return { kind, index };
@@ -1521,7 +1528,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             // The named star clusters (Messier, or a common name): the
             // selected one first, then the nearest to the camera
             const clusterCandidates = [];
-            for (const kind of CLUSTER_KINDS) {
+            for (const kind of LANDMARK_KINDS) {
                 if (!clusters[kind]) continue;
                 if (!clusterLabels[kind]) {
                     clusterLabels[kind] = clusters[kind].labels().map(l => {
@@ -1764,7 +1771,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             // The star clusters; each kind's stars loaded once near one of
             // them out of the Solar System (or one is opened)
             const clustersNow = {};
-            for (const kind of CLUSTER_KINDS) {
+            for (const kind of LANDMARK_KINDS) {
                 const c = clusters[kind];
                 clustersNow[kind] = false;
                 if (!c) continue;
@@ -1779,7 +1786,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 c.setStarsOn(Boolean(clusterStars[kind]?.visible));
                 clustersNow[kind] = c.fade() > 0.3;
             }
-            if (CLUSTER_KINDS.some(k => clustersNow[k] !== clustersWereShown[k])) {
+            if (LANDMARK_KINDS.some(k => clustersNow[k] !== clustersWereShown[k])) {
                 clustersWereShown = clustersNow;
                 setClustersShown(clustersNow);
             }
@@ -2320,7 +2327,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     } else if (focus.type === 'cluster' && landmarks?.[focus.kind]) {
         const info = clusterInfo(focus.kind, landmarks[focus.kind], focus.index);
         title = info.name;
-        subtitle = `${CLUSTER_NAMES[focus.kind][0]}${info.title ? ` · ${info.title}` : ''}`;
+        subtitle = `${LANDMARK_NAMES[focus.kind][0]}${info.title ? ` · ${info.title}` : ''}`;
     } else if (focus.type === 'ring') {
         const f = RING_FEATURES_BY_ID.get(focus.id);
         title = f.name;
@@ -2572,6 +2579,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 </label>
                 <label
                     className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                    title="Nebulae whose 3D shape has been measured, each drawn from its published model at its measured distance. Real, not part of the drawing"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showClusters.nebulae}
+                        disabled={!showGalaxy}
+                        onChange={(e) => showClusterKind('nebulae', e.target.checked)}
+                    />
+                    <span className="universe-3d-swatch" style={{ background: '#ffa676' }} />
+                    Nebulae in 3D (measured)
+                </label>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
                     title="The band across the sky: the model's starlight added up along each line of sight and dimmed by its dust, from wherever you are. Rendered, not a photo"
                 >
                     <input
@@ -2693,13 +2713,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     <MapLegend title="Asteroids & comets" storageKey="universe3d.legend.cloud" items={cloudLegendItems} />
                 )}
                 {/* (the galaxy's cards have their own key) */}
-                {(galaxyShown || masersShown || CLUSTER_KINDS.some(k => clustersShown[k])) && !(selectedGalaxy && galaxyCards) && (
+                {(galaxyShown || masersShown || LANDMARK_KINDS.some(k => clustersShown[k])) && !(selectedGalaxy && galaxyCards) && (
                     <GalaxyLegend
                         showModel={galaxyShown}
                         showMasers={masersShown}
                         showRanges={linesOn('maserRanges')}
                         showGlobulars={clustersShown.globulars}
                         showOpenClusters={clustersShown.open_clusters}
+                        showNebulae={clustersShown.nebulae}
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
                 )}
