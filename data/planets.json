@@ -1,0 +1,82 @@
+{
+  "source": "NASA Planetary Fact Sheet, https://nssdc.gsfc.nasa.gov/planetary/factsheet/ (Sun: NASA Sun Fact Sheet). Moon counts change as new moons are confirmed; checked against NASA Science as of 2025.",
+  "units": {
+    "diameter_km": "equatorial diameter, km",
+    "mass_earth": "mass in Earth masses",
+    "gravity_ms2": "surface gravity, m/s^2",
+    "rotation_h": "sidereal rotation period, hours (negative = retrograde)",
+    "day_h": "length of day (sunrise to sunrise), hours",
+    "distance_mkm": "mean distance from the Sun (Moon: from Earth), million km",
+    "orbit_days": "orbital period, Earth days",
+    "temp_c": "mean surface temperature, C (gas giants: at 1 bar)",
+    "color": "display colour for the 3D view (hex)"
+  },
+  "bodies": [
+    {
+      "id": "Sun", "name": "Sun", "type": "star",
+      "diameter_km": 1392700, "mass_earth": 333000, "gravity_ms2": 274.0,
+      "rotation_h": 609.1, "day_h": null, "distance_mkm": 0, "orbit_days": null,
+      "temp_c": 5500, "moons": null, "rings": false, "color": "#fff4d6"
+    },
+    {
+      "id": "Mercury", "name": "Mercury", "type": "planet",
+      "diameter_km": 4879, "mass_earth": 0.0553, "gravity_ms2": 3.7,
+      "rotation_h": 1407.6, "day_h": 4222.6, "distance_mkm": 57.9, "orbit_days": 88.0,
+      "temp_c": 167, "moons": 0, "rings": false, "color": "#9e9a95"
+    },
+    {
+      "id": "Venus", "name": "Venus", "type": "planet",
+      "diameter_km": 12104, "mass_earth": 0.815, "gravity_ms2": 8.9,
+      "rotation_h": -5832.6, "day_h": 2802.0, "distance_mkm": 108.2, "orbit_days": 224.7,
+      "temp_c": 464, "moons": 0, "rings": false, "color": "#e8d3a2"
+    },
+    {
+      "id": "Earth", "name": "Earth", "type": "planet",
+      "diameter_km": 12756, "mass_earth": 1, "gravity_ms2": 9.8,
+      "rotation_h": 23.9, "day_h": 24.0, "distance_mkm": 149.6, "orbit_days": 365.2,
+      "temp_c": 15, "moons": 1, "rings": false, "color": "#4f86c6"
+    },
+    {
+      "id": "Moon", "name": "Moon", "type": "moon", "parent": "Earth",
+      "diameter_km": 3475, "mass_earth": 0.0123, "gravity_ms2": 1.6,
+      "rotation_h": 655.7, "day_h": 708.7, "distance_mkm": 0.384, "orbit_days": 27.3,
+      "temp_c": -20, "moons": 0, "rings": false, "color": "#c8c5c0"
+    },
+    {
+      "id": "Mars", "name": "Mars", "type": "planet",
+      "diameter_km": 6792, "mass_earth": 0.107, "gravity_ms2": 3.7,
+      "rotation_h": 24.6, "day_h": 24.7, "distance_mkm": 228.0, "orbit_days": 687.0,
+      "temp_c": -65, "moons": 2, "rings": false, "color": "#c1440e"
+    },
+    {
+      "id": "Jupiter", "name": "Jupiter", "type": "planet",
+      "diameter_km": 142984, "mass_earth": 317.8, "gravity_ms2": 23.1,
+      "rotation_h": 9.9, "day_h": 9.9, "distance_mkm": 778.5, "orbit_days": 4331,
+      "temp_c": -110, "moons": 95, "rings": true, "color": "#d8b48a"
+    },
+    {
+      "id": "Saturn", "name": "Saturn", "type": "planet",
+      "diameter_km": 120536, "mass_earth": 95.2, "gravity_ms2": 9.0,
+      "rotation_h": 10.7, "day_h": 10.7, "distance_mkm": 1432.0, "orbit_days": 10747,
+      "temp_c": -140, "moons": 274, "rings": true, "color": "#e3cf9a"
+    },
+    {
+      "id": "Uranus", "name": "Uranus", "type": "planet",
+      "diameter_km": 51118, "mass_earth": 14.5, "gravity_ms2": 8.7,
+      "rotation_h": -17.2, "day_h": 17.2, "distance_mkm": 2867.0, "orbit_days": 30589,
+      "temp_c": -195, "moons": 29, "rings": true, "color": "#9fd8e0"
+    },
+    {
+      "id": "Neptune", "name": "Neptune", "type": "planet",
+      "diameter_km": 49528, "mass_earth": 17.1, "gravity_ms2": 11.0,
+      "rotation_h": 16.1, "day_h": 16.1, "distance_mkm": 4515.0, "orbit_days": 59800,
+      "temp_c": -200, "moons": 16, "rings": true, "color": "#4b70dd"
+    },
+    {
+      "id": "Pluto", "name": "Pluto", "type": "dwarf planet",
+      "diameter_km": 2376, "mass_earth": 0.0022, "gravity_ms2": 0.7,
+      "rotation_h": -153.3, "day_h": 153.3, "distance_mkm": 5906.4, "orbit_days": 90560,
+      "temp_c": -225, "moons": 5, "rings": false, "color": "#c9b29b"
+    }
+  ]
+}

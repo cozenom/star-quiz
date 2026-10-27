@@ -1,0 +1,24 @@
+{
+ "source": "Star_Data/scripts/build_rr_lyrae.py: RR Lyrae stars, distances from Li et al. 2023 (ApJ 944, 88; CC BY 4.0), mean magnitudes from Gaia DR3 vari_rrlyrae (ESA/Gaia/DPAC; Clementini et al. 2023), distance error <= 25%, minus stars in stars_3d.json and cluster members",
+ "layout": "int16 x,y,z (scene frame, units of pos_unit_ly) for all stars, then uint8 absMag, uint8 B-V, uint8 E(B-V)",
+ "pos_unit_ly": 16,
+ "abs_mag": {
+  "min": -12.0,
+  "step": 0.1
+ },
+ "bv": {
+  "min": -0.4,
+  "step": 0.01,
+  "missing": 255
+ },
+ "ebv": {
+  "step": 0.01,
+  "missing": 255
+ },
+ "tiers": [
+  {
+   "file": "stars_rrlyrae.bin",
+   "count": 134364
+  }
+ ]
+}
