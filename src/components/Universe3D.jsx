@@ -49,6 +49,11 @@ const SUN_ABS_MAG = 4.83;
 // Gaia stars beyond 100 pc (utils/farStars): the first tier loads once the
 // camera is this far from the Sun (ly), where their distances start to show
 const FAR_STARS_LOAD_LY = 30;
+// The RR Lyrae stars (halo tracers, utils/farStars) load with them. They
+// keep the dim-dot floor at any distance (STAR_MIN_ALPHA), where the other
+// stars' fades as the model comes in: each stands in for the many
+// thousands of halo stars too faint to pick out, as the model's disc does
+// for the disc's.
 // A kind of star cluster's stars load when the camera is this close to one
 // of them (ly), and has left the Solar System
 const CLUSTER_STARS_LOAD_LY = 2000;
@@ -364,10 +369,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showAllFarStars, setShowAllFarStars] = useState(false);
     const [farMoreTier, setFarMoreTier] = useState('idle');
     const [farMeta, setFarMeta] = useState(null);
+    // RR Lyrae stars (the halo), and their count once known
+    const [showHaloStars, setShowHaloStars] = useState(true);
+    const [haloCount, setHaloCount] = useState(null);
     // The measured 3D dust near the Sun (utils/dustMap)
     const [showDust, setShowDust] = useState(true);
     // Fetched once per visit to the 3D view, kept across scene rebuilds
     const farSourceRef = useRef(null);
+    const haloSourceRef = useRef(null);
     const dustSourceRef = useRef(null);
     if (!farSourceRef.current) {
         const base = `${import.meta.env.BASE_URL}data/`;
@@ -378,6 +387,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         farSourceRef.current = farStarSource(
             name => get(name).then(r => r.json()),
             name => get(name).then(r => r.arrayBuffer()),
+        );
+        haloSourceRef.current = farStarSource(
+            name => get(name).then(r => r.json()),
+            name => get(name).then(r => r.arrayBuffer()),
+            'stars_rrlyrae.json',
         );
         dustSourceRef.current = dustMapSource(
             name => get(name).then(r => r.json()),
@@ -564,7 +578,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, showAllFarStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
+    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, showAllFarStars, showHaloStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -758,8 +772,26 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 if (tier > 0) setFarMoreTier('error');
             });
         };
+        // RR Lyrae stars (the halo): one Points once loaded, drawn only, like
+        // the far stars
+        let haloPoints = null;
+        let haloRequested = false;
+        const loadHalo = () => {
+            if (haloRequested) return;
+            haloRequested = true;
+            haloSourceRef.current.load(0).then((b) => {
+                if (farDisposed) return;
+                haloPoints = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
+                scene.add(haloPoints);
+                setHaloCount(b.count);
+                applyBloom();
+            }).catch((error) => {
+                console.error('Error loading the RR Lyrae stars:', error);
+                haloRequested = false;  // a later toggle or flight tries again
+            });
+        };
         // Every star Points, for the settings they share
-        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints, ...Object.values(clusterStars)].filter(Boolean);
+        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints, haloPoints, ...Object.values(clusterStars)].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -1807,15 +1839,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 setCloudShown(cloudNow);
             }
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
-            starObjects().forEach(obj => { if (obj !== sun && obj !== gaiaFaint) obj.material.uniforms.uMinAlpha.value = minAlpha; });
-            // Gaia stars beyond 100 pc: the first tier once heading out, the
-            // bigger one when asked
+            starObjects().forEach(obj => {
+                if (obj !== sun && obj !== gaiaFaint && obj !== haloPoints) obj.material.uniforms.uMinAlpha.value = minAlpha;
+            });
+            // Gaia stars beyond 100 pc: the first tier and the RR Lyrae once
+            // heading out, the bigger tier when asked
             const opts = optionsRef.current;
             if (opts.showFarStars && camera.position.length() > FAR_STARS_LOAD_LY) loadFarTier(0);
             if (opts.showFarStars && opts.showAllFarStars) loadFarTier(1);
+            if (opts.showFarStars && opts.showHaloStars && camera.position.length() > FAR_STARS_LOAD_LY) loadHalo();
             farPoints.forEach((points, tier) => {
                 if (points) points.visible = opts.showFarStars && (tier === 0 || opts.showAllFarStars);
             });
+            if (haloPoints) haloPoints.visible = opts.showFarStars && opts.showHaloStars;
             if (solar) solarLayer.near = solarNearPlane();
             starDisc.update(camera, mount.clientHeight);
             syncCameras();
@@ -1849,7 +1885,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             canvas.removeEventListener('pointerleave', onPointerLeave);
             controls.dispose();
             farDisposed = true;
-            [stars, gaiaStars, gaiaFaint, sun, ...farPoints, ...Object.values(clusterStars), hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
+            [stars, gaiaStars, gaiaFaint, sun, ...farPoints, haloPoints, ...Object.values(clusterStars), hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
                 .forEach(disposeObject);
             solar?.dispose();
             cloud?.dispose();
@@ -2417,6 +2453,18 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         : farMeta ? `All ${(farMeta.tiers.reduce((n, t) => n + t.count, 0) / 1e6).toFixed(1)} million` : 'All of them'}
                     {farMoreTier === 'error' && <span className="universe-3d-error-note"> (failed)</span>}
                 </label>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}
+                    title={`${haloCount ? haloCount.toLocaleString() : 'All of Gaia\'s'} RR Lyrae stars, at distances from their pulsation (out to ~470,000 ly): the halo round the disc, the Sagittarius stream, the Magellanic Clouds. Each stands in for many thousands of fainter halo stars, so they stay a faint dot from afar.`}
+                >
+                    <input
+                        type="checkbox"
+                        checked={showHaloStars}
+                        disabled={!showFarStars}
+                        onChange={(e) => setShowHaloStars(e.target.checked)}
+                    />
+                    Halo (RR Lyrae)
+                </label>
                 {planetFacts && (
                     <>
                         <label className="universe-3d-checkbox">
@@ -2721,6 +2769,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         showGlobulars={clustersShown.globulars}
                         showOpenClusters={clustersShown.open_clusters}
                         showNebulae={clustersShown.nebulae}
+                        showHalo={showFarStars && showHaloStars && haloCount !== null}
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
                 )}

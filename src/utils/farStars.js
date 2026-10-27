@@ -4,8 +4,11 @@
 // star shader works out how bright each looks from the camera). Colours and
 // brightness as seen, like stars_3d and stars_gaia (no dust correction).
 //
-// Each tier file: int16 x, y, z (ly, scene frame) for all its stars, then
-// uint8 absolute magnitude, uint8 B-V, uint8 E(BP-RP) (see the meta).
+// Each tier file: int16 x, y, z (ly, scene frame; in units of the meta's
+// pos_unit_ly if it has one) for all its stars, then uint8 absolute
+// magnitude, uint8 B-V, uint8 E(BP-RP) (see the meta). The RR Lyrae stars
+// (stars_rrlyrae.json, Star_Data/scripts/build_rr_lyrae.py) come in the
+// same layout, in units of 16 ly: they reach ~470,000 ly.
 
 import { bvToColor } from './universe3d.js';
 
@@ -25,7 +28,8 @@ export function decodeFarStars(buffer, meta, count) {
     const bytes = new Uint8Array(buffer, count * 6);
     const mag = bytes.subarray(0, count);
     const bv = bytes.subarray(count, 2 * count);
-    const positions = Float32Array.from(pos);
+    const unit = meta.pos_unit_ly ?? 1;
+    const positions = Float32Array.from(pos, v => v * unit);
     const colors = new Float32Array(count * 3);
     const absMags = new Float32Array(count);
     const table = colorTable(meta);
@@ -39,14 +43,15 @@ export function decodeFarStars(buffer, meta, count) {
     return { positions, colors, absMags, count };
 }
 
-// fetchJson / fetchBuffer: (name) => Promise. Returns {meta(), load(tier)
-// -> Promise of decoded buffers}; each tier is fetched once.
-export function farStarSource(fetchJson, fetchBuffer) {
+// fetchJson / fetchBuffer: (name) => Promise; metaFile: the meta's name.
+// Returns {meta(), load(tier) -> Promise of decoded buffers}; each tier is
+// fetched once.
+export function farStarSource(fetchJson, fetchBuffer, metaFile = 'stars_far.json') {
     let metaPromise = null;
     const tiers = new Map();
     const meta = () => {
         if (!metaPromise) {
-            metaPromise = fetchJson('stars_far.json').catch((error) => {
+            metaPromise = fetchJson(metaFile).catch((error) => {
                 metaPromise = null;  // try again later
                 throw error;
             });

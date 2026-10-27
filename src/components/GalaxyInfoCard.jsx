@@ -21,6 +21,8 @@ export const GALAXY_KEY = [
     { color: hex(GALAXY_COLORS.hii[0]), name: 'Glowing gas', about: 'Hydrogen lit up by young hot stars glows red-pink (H II regions), like the Orion Nebula.' },
     { color: '#15110d', name: 'Dust', about: 'Grains of rock and soot that block light, thickest along the inner edge of each arm and in the middle of the disc. Within about 15,000 ly of the Sun it is the measured 3D map (below), not drawn to match.' },
     { color: hex(MASER_COLOR), ring: true, name: 'Masers', about: 'Real, not drawn to match: the measured masers at their distances. The faint line through each spans its distance\'s uncertainty, along our line of sight (cut at twice the distance when the far end is open).' },
+    // (the stars' own colours: RR Lyrae are white to yellow-white, B-V ~0.2-0.4)
+    { color: '#f6f0e2', halo: true, name: 'Halo stars', about: 'Real, not drawn to match: about 134,000 RR Lyrae stars, old giants that pulse every half day or so. They all shine with nearly the same brightness, so how bright each looks tells how far it is, out past 450,000 ly, far beyond where parallaxes work (Li et al. 2023, from Gaia). They trace the faint halo of old stars round the disc, the Sagittarius stream (a small galaxy being torn apart as it orbits ours), the bulge, and the Large and Small Magellanic Clouds. The halo holds only a few percent of the Milky Way\'s stars (about 1.4 billion Suns\' worth, Deason et al. 2019), spread over a volume far bigger than the disc: each dot stands in for many thousands of stars too faint to see from out here.' },
     { color: hex(GLOBULAR_COLOR), globular: true, name: 'Globular clusters', about: 'Real, not drawn to match: 167 globular clusters at their measured distances, balls of hundreds of thousands of stars swarming round the centre in a halo, far above and below the disc. Each glows out to its true size when you get close.' },
     { color: hex(NEBULA_COLOR), nebula: true, name: 'Nebulae', about: 'Real, not drawn to match: the few nebulae whose 3D shape has been measured, each drawn from its published model at its measured distance. A dot from afar; fly close to see its shape: glowing gas, or dust lit by its star.' },
     { gradient: OPEN_AGE_COLORS.map(([, c]) => hex(c)), open: true, name: 'Open clusters', about: 'Real, not drawn to match: 4,000 open clusters found by Gaia, at their measured distances, coloured by age: blue for the young ones (a few million years), white, yellow, then orange for the old (billions). The youngest trace the spiral arms they formed in.' },
@@ -41,18 +43,21 @@ export function KeySwatch({ k }) {
 // The on-screen legend, shown while the model is: short names; the card
 // (onOpen) has the explanations. Masers' entries only while they're shown.
 const LEGEND = [
-    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.globular && !k.open && !k.nebula),
+    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.halo && !k.globular && !k.open && !k.nebula),
     { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
+    { ...GALAXY_KEY.find(k => k.halo), name: 'Halo stars: RR Lyrae (measured)' },
     { ...GALAXY_KEY.find(k => k.globular), name: 'Globular clusters (measured)' },
     { ...GALAXY_KEY.find(k => k.open), name: 'Open clusters, young → old (measured)' },
     { ...GALAXY_KEY.find(k => k.nebula), name: 'Nebulae in 3D (measured)' },
 ];
 // showModel: the model is on screen; showMasers: its masers are (they
 // fade in before the model does); showRanges: their distance ranges are
-// drawn; showGlobulars / showOpenClusters / showNebulae: those landmarks are
-export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, showOpenClusters = false, showNebulae = false, onOpen }) {
+// drawn; showGlobulars / showOpenClusters / showNebulae: those landmarks
+// are; showHalo: the RR Lyrae are (listed while the model is)
+export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, showOpenClusters = false, showNebulae = false, showHalo = false, onOpen }) {
     const shown = (k) => (k.globular ? showGlobulars : k.open ? showOpenClusters : k.nebula ? showNebulae
+        : k.halo ? showHalo && showModel
         : k.maser ? showMasers && (!k.line || showRanges) : showModel);
     return (
         <MapLegend
