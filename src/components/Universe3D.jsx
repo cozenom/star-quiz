@@ -12,7 +12,7 @@ import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '..
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
-import { farStarSource } from '../utils/farStars';
+import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { createDustMap, dustMapSource } from '../utils/dustMap';
 import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars } from '../utils/landmarks3d';
 import {
@@ -162,20 +162,47 @@ const LINE_OPTIONS = [
 // (~2 AU at 500 ly) and the sprite would jump around next to its disc.
 // The star Points sit at the layer origin, so mat3(modelViewMatrix) is just
 // the view's rotation.
-const starVertexShader = `
-    attribute float absMag;
-    attribute vec3 color;
+const STAR_VERTEX_GLSL = `
     uniform vec3 uCamHigh;
     uniform vec3 uCamLow;
     ${SPRITE_VERTEX_GLSL}
 
-    void main() {
-        vec3 relative = (position - uCamHigh) - uCamLow;
+    void placeStar(vec3 pos, vec3 color, float absMag) {
+        vec3 relative = (pos - uCamHigh) - uCamLow;
         vec4 mvPosition = vec4(mat3(modelViewMatrix) * relative, 1.0);
         float distPc = max(length(mvPosition.xyz) / ${LY_PER_PARSEC}, 1e-9);
         float mag = absMag + 5.0 * log(distPc) / log(10.0) - 5.0;
         spriteFromMagnitude(mag, color);
         gl_Position = projectionMatrix * mvPosition;
+    }
+`;
+
+const starVertexShader = `
+    attribute float absMag;
+    attribute vec3 color;
+    ${STAR_VERTEX_GLSL}
+
+    void main() {
+        placeStar(position, color, absMag);
+    }
+`;
+
+// The Gaia tiers and RR Lyrae (utils/farStars) as they are in their files:
+// int16 positions and uint8 magnitude and B-V codes, which the GPU reads as
+// floats; scaled here with the meta's steps (farStarDecoding), the colour
+// looked up by code
+const compactStarVertexShader = `
+    attribute float magCode;
+    attribute float bvCode;
+    uniform float uPosUnit;
+    uniform float uMagMin;
+    uniform float uMagStep;
+    uniform sampler2D uBvTable;
+    ${STAR_VERTEX_GLSL}
+
+    void main() {
+        vec3 tint = texelFetch(uBvTable, ivec2(int(bvCode), 0), 0).rgb;
+        placeStar(position * uPosUnit, tint, uMagMin + magCode * uMagStep);
     }
 `;
 
@@ -239,12 +266,8 @@ function setStarCamera(starCamera, position) {
     starCamera.uCamLow.value.subVectors(position, high);
 }
 
-function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxSize = SPRITE_MAX_SIZE_PX) {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.setAttribute('absMag', new THREE.BufferAttribute(absMags, 1));
-    const material = new THREE.ShaderMaterial({
+function makeStarMaterial(vertexShader, pixelRatio, starCamera, maxSize, decoding = {}) {
+    return new THREE.ShaderMaterial({
         uniforms: {
             uPixelRatio: { value: pixelRatio },
             uMaxSize: { value: maxSize },
@@ -252,14 +275,42 @@ function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxS
             uGlare: { value: 0 },
             uGlareMag: { value: GLARE_MAG },
             ...starCamera,
+            ...decoding,
         },
-        vertexShader: starVertexShader,
+        vertexShader,
         fragmentShader: starFragmentShader,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
     });
-    return new THREE.Points(geometry, material);
+}
+
+function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxSize = SPRITE_MAX_SIZE_PX) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('absMag', new THREE.BufferAttribute(absMags, 1));
+    return new THREE.Points(geometry, makeStarMaterial(starVertexShader, pixelRatio, starCamera, maxSize));
+}
+
+// Once on the GPU, a compact file's rows aren't needed in JS
+function dropArray() {
+    this.array = null;
+}
+
+// One compact Gaia file (utils/farStars splitFarStars) for the compact star
+// shader; decoding: farStarDecoding(meta), shared by a meta's files; reach:
+// farStarReach(meta). Drawn, not picked, so its rows go once uploaded; the
+// bounds are set from the reach, as three can't work them out without them.
+function makeCompactStarPoints(part, decoding, reach, pixelRatio, starCamera) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3).onUpload(dropArray));
+    geometry.setAttribute('magCode', new THREE.BufferAttribute(part.magCodes, 1).onUpload(dropArray));
+    geometry.setAttribute('bvCode', new THREE.BufferAttribute(part.bvCodes, 1).onUpload(dropArray));
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), reach);
+    const points = new THREE.Points(geometry, makeStarMaterial(compactStarVertexShader, pixelRatio, starCamera, SPRITE_MAX_SIZE_PX, decoding));
+    points.frustumCulled = false;
+    return points;
 }
 
 // sizePx: device pixels; the ring's minimum size (see sizeRingToBody)
@@ -319,6 +370,17 @@ function disposeObject(obj) {
     obj.material.dispose();
 }
 
+// A far-star depth choice: the stars down to that tier, and the download
+// past tier 0 (which loads anyway), 9 bytes a star
+function farDepthLabel(meta, depth) {
+    const tiers = meta.tiers.slice(0, depth + 1);
+    const millions = (tiers.reduce((n, t) => n + t.count, 0) / 1e6).toFixed(1);
+    if (depth === 0) return `G < ${tiers[0].g_max}: ${millions}M`;
+    const mb = Math.round(tiers.slice(1).reduce((n, t) => n + t.count, 0) * 9 / 1e6);
+    const name = depth === meta.tiers.length - 1 ? 'All' : `G < ${tiers[depth].g_max}`;
+    return `${name}: ${millions}M (+${mb} MB)`;
+}
+
 // A distance in ly, in km / AU / ly to suit
 function formatLength(ly) {
     const au = ly * AU_PER_LY;
@@ -363,11 +425,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showSmallBodies, setShowSmallBodies] = useState(true);
     const [hiddenGroups, setHiddenGroups] = useState(() => new Set());
     const [showAllAsteroids, setShowAllAsteroids] = useState(false);
-    // Gaia stars beyond 100 pc: shown?, the bigger tier asked for?, its
-    // state ('idle' | 'loading' | 'loaded' | 'error'), and the tiers' meta
+    // Gaia stars beyond 100 pc: shown?, the faintest tier asked for (tier 0
+    // always loads; the rest down to farDepth on demand), the state of the
+    // tiers past 0 ('idle' | 'loading' | 'loaded' | 'error'), and the meta
     const [showFarStars, setShowFarStars] = useState(true);
-    const [showAllFarStars, setShowAllFarStars] = useState(false);
-    const [farMoreTier, setFarMoreTier] = useState('idle');
+    const [farDepth, setFarDepth] = useState(0);
+    const [farMoreState, setFarMoreState] = useState('idle');
     const [farMeta, setFarMeta] = useState(null);
     // RR Lyrae stars (the halo), and their count once known
     const [showHaloStars, setShowHaloStars] = useState(true);
@@ -578,7 +641,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, showAllFarStars, showHaloStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
+    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -747,51 +810,75 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             scene.add(gaiaFaint);
         }
 
-        // Gaia stars beyond 100 pc, one Points per tier as it loads (drawn,
-        // not picked or labelled, like gaiaStars)
+        // Gaia stars beyond 100 pc, their Points per tier as each loads, one
+        // per file (drawn, not picked or labelled, like gaiaStars). farState:
+        // tier -> 'loading' | 'loaded' | 'error'; a failed tier is tried again
+        // when the options change (see lastFarOptions).
         const farPoints = [];
-        const farRequested = new Set();
+        const farState = new Map();
+        let farDecoding = null;
         let farDisposed = false;
+        let lastFarOptions = null;
+        farSourceRef.current.meta().then(meta => { if (!farDisposed) setFarMeta(meta); }).catch(() => {});
+        const reportFarMore = () => {
+            const states = [...farState].filter(([tier]) => tier > 0).map(([, state]) => state);
+            setFarMoreState(states.includes('error') ? 'error'
+                : states.includes('loading') ? 'loading'
+                    : states.length ? 'loaded' : 'idle');
+        };
+        // A compact source's files -> Points in the scene
+        const addCompactStars = (parts, decoding, meta) => parts.map((part) => {
+            const points = makeCompactStarPoints(part, decoding, farStarReach(meta), pixelRatio, starCameraUniforms);
+            scene.add(points);
+            return points;
+        });
         const loadFarTier = (tier) => {
-            if (farRequested.has(tier)) return;
-            farRequested.add(tier);
-            if (tier > 0) setFarMoreTier('loading');
+            if (farState.has(tier)) return;
+            farState.set(tier, 'loading');
+            reportFarMore();
             const source = farSourceRef.current;
-            source.meta().then(meta => { if (!farDisposed) setFarMeta(meta); }).catch(() => {});
-            source.load(tier).then((b) => {
+            Promise.all([source.meta(), source.load(tier)]).then(([meta, parts]) => {
                 if (farDisposed) return;
-                const points = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
-                points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
-                farPoints[tier] = points;
-                scene.add(points);
+                farDecoding ??= farStarDecoding(meta);
+                farPoints[tier] = addCompactStars(parts, farDecoding, meta);
+                farPoints[tier].forEach((points) => {
+                    points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                });
+                farState.set(tier, 'loaded');
+                reportFarMore();
                 applyBloom();
-                if (tier > 0) setFarMoreTier('loaded');
             }).catch((error) => {
+                if (farDisposed) return;
                 console.error('Error loading Gaia stars:', error);
-                farRequested.delete(tier);  // a later toggle or flight tries again
-                if (tier > 0) setFarMoreTier('error');
+                farState.set(tier, 'error');
+                reportFarMore();
             });
         };
-        // RR Lyrae stars (the halo): one Points once loaded, drawn only, like
-        // the far stars
-        let haloPoints = null;
-        let haloRequested = false;
+        // RR Lyrae stars (the halo): drawn only, like the far stars, from
+        // the same compact layout. haloState: null | 'loading' | 'loaded' |
+        // 'error' (tried again when the options change, as farState).
+        let haloPoints = [];
+        let haloState = null;
+        let haloDecoding = null;
         const loadHalo = () => {
-            if (haloRequested) return;
-            haloRequested = true;
-            haloSourceRef.current.load(0).then((b) => {
+            if (haloState) return;
+            haloState = 'loading';
+            const source = haloSourceRef.current;
+            Promise.all([source.meta(), source.load(0)]).then(([meta, parts]) => {
                 if (farDisposed) return;
-                haloPoints = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
-                scene.add(haloPoints);
-                setHaloCount(b.count);
+                haloDecoding = farStarDecoding(meta);
+                haloPoints = addCompactStars(parts, haloDecoding, meta);
+                haloState = 'loaded';
+                setHaloCount(parts.reduce((n, part) => n + part.count, 0));
                 applyBloom();
             }).catch((error) => {
+                if (farDisposed) return;
                 console.error('Error loading the RR Lyrae stars:', error);
-                haloRequested = false;  // a later toggle or flight tries again
+                haloState = 'error';
             });
         };
         // Every star Points, for the settings they share
-        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints, haloPoints, ...Object.values(clusterStars)].filter(Boolean);
+        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...Object.values(clusterStars)].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -1840,18 +1927,25 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             }
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
             starObjects().forEach(obj => {
-                if (obj !== sun && obj !== gaiaFaint && obj !== haloPoints) obj.material.uniforms.uMinAlpha.value = minAlpha;
+                if (obj !== sun && obj !== gaiaFaint && !haloPoints.includes(obj)) obj.material.uniforms.uMinAlpha.value = minAlpha;
             });
             // Gaia stars beyond 100 pc: the first tier and the RR Lyrae once
-            // heading out, the bigger tier when asked
+            // heading out, the fainter tiers down to farDepth when asked
             const opts = optionsRef.current;
+            const farOptions = `${opts.showFarStars} ${opts.farDepth} ${opts.showHaloStars}`;
+            if (farOptions !== lastFarOptions) {
+                lastFarOptions = farOptions;
+                farState.forEach((state, tier) => { if (state === 'error') farState.delete(tier); });
+                if (haloState === 'error') haloState = null;
+                reportFarMore();
+            }
             if (opts.showFarStars && camera.position.length() > FAR_STARS_LOAD_LY) loadFarTier(0);
-            if (opts.showFarStars && opts.showAllFarStars) loadFarTier(1);
+            if (opts.showFarStars) for (let tier = 1; tier <= opts.farDepth; tier++) loadFarTier(tier);
             if (opts.showFarStars && opts.showHaloStars && camera.position.length() > FAR_STARS_LOAD_LY) loadHalo();
-            farPoints.forEach((points, tier) => {
-                if (points) points.visible = opts.showFarStars && (tier === 0 || opts.showAllFarStars);
-            });
-            if (haloPoints) haloPoints.visible = opts.showFarStars && opts.showHaloStars;
+            farPoints.forEach((tierPoints, tier) => tierPoints.forEach((points) => {
+                points.visible = opts.showFarStars && tier <= opts.farDepth;
+            }));
+            haloPoints.forEach((points) => { points.visible = opts.showFarStars && opts.showHaloStars; });
             if (solar) solarLayer.near = solarNearPlane();
             starDisc.update(camera, mount.clientHeight);
             syncCameras();
@@ -1885,7 +1979,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             canvas.removeEventListener('pointerleave', onPointerLeave);
             controls.dispose();
             farDisposed = true;
-            [stars, gaiaStars, gaiaFaint, sun, ...farPoints, haloPoints, ...Object.values(clusterStars), hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
+            [farDecoding, haloDecoding].forEach(decoding => decoding?.uBvTable.value.dispose());
+            [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...Object.values(clusterStars), hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
                 .forEach(disposeObject);
             solar?.dispose();
             cloud?.dispose();
@@ -2428,7 +2523,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 </label>
                 <label
                     className="universe-3d-checkbox"
-                    title="Gaia's stars beyond 330 ly with distances good to 10%, at their measured positions (out to ~16,000 ly): they show as you fly out among the stars"
+                    title="Gaia's stars beyond 330 ly with distances good to 5%, at their measured positions (out to ~19,000 ly): they show as you fly out among the stars"
                 >
                     <input
                         type="checkbox"
@@ -2439,19 +2534,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 </label>
                 <label
                     className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}
-                    title={farMeta
-                        ? `Adds ${farMeta.tiers[1].count.toLocaleString()} fainter stars (a ${Math.round(farMeta.tiers[1].count * 9 / 1e6)} MB download, heavy for phones)`
-                        : 'Adds the fainter stars (a large download, heavy for phones)'}
+                    title="How faint the Gaia stars go (G: Gaia's magnitude, as seen from Earth). The fainter tiers are large downloads, heavy for phones."
                 >
-                    <input
-                        type="checkbox"
-                        checked={showAllFarStars}
-                        disabled={!showFarStars || farMoreTier === 'loading'}
-                        onChange={(e) => setShowAllFarStars(e.target.checked)}
-                    />
-                    {farMoreTier === 'loading' ? 'Loading…'
-                        : farMeta ? `All ${(farMeta.tiers.reduce((n, t) => n + t.count, 0) / 1e6).toFixed(1)} million` : 'All of them'}
-                    {farMoreTier === 'error' && <span className="universe-3d-error-note"> (failed)</span>}
+                    <select
+                        value={farDepth}
+                        disabled={!showFarStars}
+                        onChange={(e) => setFarDepth(Number(e.target.value))}
+                    >
+                        {farMeta
+                            ? farMeta.tiers.map((tier, k) => <option key={k} value={k}>{farDepthLabel(farMeta, k)}</option>)
+                            : <option value={0}>Brightest</option>}
+                    </select>
+                    {farMoreState === 'loading' && 'Loading…'}
+                    {farMoreState === 'error' && <span className="universe-3d-error-note">(failed)</span>}
                 </label>
                 <label
                     className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}

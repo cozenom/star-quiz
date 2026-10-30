@@ -1,5 +1,5 @@
 {
- "source": "Star_Data/scripts/build_far_stars.py: Gaia DR3 (ESA/Gaia/DPAC), parallax >= 10x its error, RUWE < 1.4, beyond 100 pc, minus stars drawn elsewhere (stars_3d.json, stars_gaia.bin, cluster members, stars_rrlyrae.bin)",
+ "source": "Star_Data/scripts/build_far_stars.py: Gaia DR3 (ESA/Gaia/DPAC), parallax >= 20x its error, RUWE < 1.4, beyond 100 pc, minus stars drawn elsewhere (stars_3d.json, stars_gaia.bin, cluster members, stars_rrlyrae.bin)",
  "layout": "per file: int16 x,y,z (ly, scene frame) for all stars, then uint8 absMag, uint8 B-V, uint8 E(BP-RP)",
  "abs_mag": {
   "min": -12.0,
@@ -16,14 +16,108 @@
  },
  "tiers": [
   {
-   "file": "stars_far_0.bin",
-   "count": 1505130,
+   "files": [
+    {
+     "file": "stars_far_0_0.bin",
+     "count": 1413140
+    }
+   ],
+   "count": 1413140,
    "g_max": 11.5
   },
   {
-   "file": "stars_far_1.bin",
-   "count": 4260013,
+   "files": [
+    {
+     "file": "stars_far_1_0.bin",
+     "count": 1949772
+    },
+    {
+     "file": "stars_far_1_1.bin",
+     "count": 1949772
+    }
+   ],
+   "count": 3899544,
    "g_max": 13.0
+  },
+  {
+   "files": [
+    {
+     "file": "stars_far_2_0.bin",
+     "count": 2074589
+    },
+    {
+     "file": "stars_far_2_1.bin",
+     "count": 2074589
+    },
+    {
+     "file": "stars_far_2_2.bin",
+     "count": 2074588
+    }
+   ],
+   "count": 6223766,
+   "g_max": 14.0
+  },
+  {
+   "files": [
+    {
+     "file": "stars_far_3_0.bin",
+     "count": 2716646
+    },
+    {
+     "file": "stars_far_3_1.bin",
+     "count": 2716645
+    },
+    {
+     "file": "stars_far_3_2.bin",
+     "count": 2716645
+    },
+    {
+     "file": "stars_far_3_3.bin",
+     "count": 2716645
+    }
+   ],
+   "count": 10866581,
+   "g_max": 15.0
+  },
+  {
+   "files": [
+    {
+     "file": "stars_far_4_0.bin",
+     "count": 2405373
+    },
+    {
+     "file": "stars_far_4_1.bin",
+     "count": 2405373
+    },
+    {
+     "file": "stars_far_4_2.bin",
+     "count": 2405373
+    },
+    {
+     "file": "stars_far_4_3.bin",
+     "count": 2405372
+    },
+    {
+     "file": "stars_far_4_4.bin",
+     "count": 2405372
+    }
+   ],
+   "count": 12026863,
+   "g_max": 16.0
+  },
+  {
+   "files": [
+    {
+     "file": "stars_far_5_0.bin",
+     "count": 2710354
+    },
+    {
+     "file": "stars_far_5_1.bin",
+     "count": 2710354
+    }
+   ],
+   "count": 5420708,
+   "g_max": 22.0
   }
  ]
 }

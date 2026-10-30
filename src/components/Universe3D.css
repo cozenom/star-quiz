@@ -139,6 +139,12 @@
     cursor: pointer;
 }
 
+/* The Gaia depth picker: fits the panel, the loading note beside it */
+.universe-3d-sub-option select {
+    flex: 1;
+    min-width: 0;
+}
+
 .universe-3d-sub-option {
     padding-left: 1.5rem;
 }
