@@ -10,6 +10,8 @@
 //     parts, e.g. the Homunculus and Eta Carinae's outer shell)
 // Cluster names from OpenNGC. Real, so shown from closer in than the model (like
 // the masers).
+//   - dwarf_galaxies: the Local Volume Database's (Pace 2025): a marker and
+//     a label; their stars are the RR Lyrae layer's (utils/farStars)
 //
 // A globular is a soft glow with a Plummer profile (surface brightness
 // (1 + (R/a)^2)^-2, a = the half-light radius), out to GLOBULAR_RADII
@@ -38,6 +40,8 @@ export const GLOBULAR_COLOR = 0xffe2ad;
 export const OPEN_AGE_COLORS = [[6.5, 0x9fc4ff], [7.7, 0xe8eeff], [8.7, 0xffe0a0], [9.7, 0xff9e60]];
 // Nebulae: each its own colour (landmarks.json); this one for the legend
 export const NEBULA_COLOR = 0xffa676;
+// Dwarf galaxies (raw hex, ours; also the legend's swatch)
+export const DWARF_COLOR = 0xcbbcff;
 // Per kind: marker diameter (px) over the range of its size measure
 // (log10 Suns for globulars, log10 members for open clusters, none for
 // nebulae), brightness
@@ -45,6 +49,7 @@ const KIND = {
     globulars: { markerPx: [3.5, 8], sizeRange: [4, 6.5], brightness: 0.9, glow: true },
     open_clusters: { markerPx: [2.5, 5.5], sizeRange: [1, 3.5], brightness: 0.7, glow: false },
     nebulae: { markerPx: [4, 4], sizeRange: [0, 1], brightness: 0.8, glow: false },
+    dwarf_galaxies: { markerPx: [4, 4], sizeRange: [0, 1], brightness: 0.8, glow: false },
 };
 export const LANDMARK_KINDS = Object.keys(KIND);
 const GLOBULAR_RADII = 3;
@@ -57,6 +62,10 @@ const VIEW_RADII = 25;
 const VIEW_MIN_LY = 60;
 // A nebula's view: this many model radii from it
 const NEBULA_VIEW_RADII = 4;
+// A dwarf galaxy's view: this many half-light radii away, and far enough
+// back that the camera isn't inside its RR Lyrae's distance errors
+const DWARF_VIEW_RADII = 5;
+const DWARF_VIEW_MIN_LY = 30000;
 // A nebula's shell: brightness seen face on, and the least |cos| of the
 // angle to the shell's surface (the edge-on limit; a part's own, from its
 // wall's measured thickness, where known)
@@ -154,7 +163,8 @@ function commonInfo(kind, g, i) {
 // distanceErr, rGc, mass (Suns), rh, rt, vmag, resolved (share of its
 // light in its Gaia stars); open clusters: distanceRange, age, ageRange
 // (million years), members, r50, rt, av; nebulae: distanceErr, type,
-// about, models [{name, ref, unknown, ...}], refs}
+// about, models [{name, ref, unknown, ...}], refs; dwarf galaxies:
+// distanceErr, mass (Suns), rh, vmag, refs}
 export function clusterInfo(kind, g, i) {
     const info = commonInfo(kind, g, i);
     if (kind === 'nebulae') {
@@ -167,6 +177,18 @@ export function clusterInfo(kind, g, i) {
             refs: g.refs[i],
             radius: g.radius_ly[i],
             label: `${g.name[i]} · ${g.type[i].toLowerCase()}, ${fmt(g.distance_ly[i])} ly`,
+        };
+    }
+    if (kind === 'dwarf_galaxies') {
+        return {
+            ...info,
+            distanceErr: g.distance_err_ly[i],
+            mass: g.mass_msun[i],
+            rh: g.rh_ly[i],
+            vmag: g.vmag[i],
+            refs: [g.distance_ref[i]],
+            radius: g.rh_ly[i],
+            label: `${g.name[i]} · dwarf galaxy, ${fmt(g.distance_ly[i])} ly`,
         };
     }
     if (kind === 'globulars') {
@@ -202,10 +224,11 @@ export const LANDMARK_NAMES = {
     globulars: ['Globular cluster', 'Globular clusters'],
     open_clusters: ['Open cluster', 'Open clusters'],
     nebulae: ['Nebula', 'Nebulae'],
+    dwarf_galaxies: ['Dwarf galaxy', 'Dwarf galaxies'],
 };
 
 // A landmark's size (ly) for its glow, marker fade and camera view
-const radiusOf = (kind, g, i) => (kind === 'globulars' ? g.rh_ly[i] : kind === 'nebulae' ? g.radius_ly[i] : g.r50_ly[i]);
+const radiusOf = (kind, g, i) => (kind === 'globulars' || kind === 'dwarf_galaxies' ? g.rh_ly[i] : kind === 'nebulae' ? g.radius_ly[i] : g.r50_ly[i]);
 
 // Camera view of landmark i: from the Sun's side, looking at it with the
 // sky beyond. {position, target, minDistance}
@@ -216,6 +239,11 @@ export function clusterPose(kind, g, i) {
         const distance = NEBULA_VIEW_RADII * radius;
         const position = target.clone().addScaledVector(target.clone().normalize(), -distance);
         return { position: position.toArray(), target: target.toArray(), minDistance: radius * 0.3 };
+    }
+    if (kind === 'dwarf_galaxies') {
+        const distance = Math.max(DWARF_VIEW_RADII * radius, DWARF_VIEW_MIN_LY);
+        const position = target.clone().addScaledVector(target.clone().normalize(), -distance);
+        return { position: position.toArray(), target: target.toArray(), minDistance: radius };
     }
     const distance = Math.max(VIEW_RADII * radius, VIEW_MIN_LY);
     const position = target.clone().addScaledVector(target.clone().normalize(), -distance);
@@ -525,11 +553,12 @@ export function buildClusters(scene, kind, g, pixelRatio) {
     for (let i = 0; i < n; i++) {
         // (a nebula's radius scaled so its dot fades as its model grows past it)
         radius[i] = (kind === 'nebulae' ? radiusOf(kind, g, i) / GLOBULAR_RADII : radiusOf(kind, g, i)) ?? 0;
-        const size = kind === 'globulars' ? Math.log10(g.mass_msun[i] ?? 1e4) : kind === 'nebulae' ? 0 : Math.log10(g.members[i] || 10);
+        const size = kind === 'globulars' ? Math.log10(g.mass_msun[i] ?? 1e4) : g.members ? Math.log10(g.members[i] || 10) : 0;
         const t = THREE.MathUtils.clamp((size - k.sizeRange[0]) / (k.sizeRange[1] - k.sizeRange[0]), 0, 1);
         marker[i] = k.markerPx[0] + (k.markerPx[1] - k.markerPx[0]) * t;
         unresolved[i] = 1 - (g.resolved?.[i] ?? 0);
-        colors.set(kind === 'globulars' ? globularColor : kind === 'nebulae' ? rgb(g.color[i]) : openAgeColor(g.age_myr[i]), 3 * i);
+        colors.set(kind === 'globulars' ? globularColor : kind === 'nebulae' ? rgb(g.color[i])
+            : kind === 'dwarf_galaxies' ? rgb(DWARF_COLOR) : openAgeColor(g.age_myr[i]), 3 * i);
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(g.xyz_ly, 3));

@@ -43,80 +43,80 @@
    "files": [
     {
      "file": "stars_far_2_0.bin",
-     "count": 2074589
+     "count": 2066195
     },
     {
      "file": "stars_far_2_1.bin",
-     "count": 2074589
+     "count": 2066195
     },
     {
      "file": "stars_far_2_2.bin",
-     "count": 2074588
+     "count": 2066194
     }
    ],
-   "count": 6223766,
+   "count": 6198584,
    "g_max": 14.0
   },
   {
    "files": [
     {
      "file": "stars_far_3_0.bin",
-     "count": 2716646
+     "count": 2709105
     },
     {
      "file": "stars_far_3_1.bin",
-     "count": 2716645
+     "count": 2709104
     },
     {
      "file": "stars_far_3_2.bin",
-     "count": 2716645
+     "count": 2709104
     },
     {
      "file": "stars_far_3_3.bin",
-     "count": 2716645
+     "count": 2709104
     }
    ],
-   "count": 10866581,
+   "count": 10836417,
    "g_max": 15.0
   },
   {
    "files": [
     {
      "file": "stars_far_4_0.bin",
-     "count": 2405373
+     "count": 2400784
     },
     {
      "file": "stars_far_4_1.bin",
-     "count": 2405373
+     "count": 2400784
     },
     {
      "file": "stars_far_4_2.bin",
-     "count": 2405373
+     "count": 2400783
     },
     {
      "file": "stars_far_4_3.bin",
-     "count": 2405372
+     "count": 2400783
     },
     {
      "file": "stars_far_4_4.bin",
-     "count": 2405372
+     "count": 2400783
     }
    ],
-   "count": 12026863,
+   "count": 12003917,
    "g_max": 16.0
   },
   {
    "files": [
     {
      "file": "stars_far_5_0.bin",
-     "count": 2710354
+     "count": 2702196
     },
     {
      "file": "stars_far_5_1.bin",
-     "count": 2710354
+     "count": 2702195
     }
    ],
-   "count": 5420708,
+   "count": 5404391,
    "g_max": 22.0
   }
  ]

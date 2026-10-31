@@ -484,7 +484,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [galaxyMasers, setGalaxyMasers] = useState(null);
     const [masersShown, setMasersShown] = useState(false);
     // The galaxy's landmarks (landmarks.json, fetched with galaxy.json):
-    // each kind (LANDMARK_KINDS: star clusters, nebulae) shown?, one's card
+    // each kind (LANDMARK_KINDS: star clusters, nebulae, dwarf galaxies) shown?, one's card
     // ({kind, index}), the data, and which kinds are on screen (legend)
     const noClusters = Object.fromEntries(LANDMARK_KINDS.map(k => [k, false]));
     const [showClusters, setShowClusters] = useState(() => Object.fromEntries(LANDMARK_KINDS.map(k => [k, true])));
@@ -1664,14 +1664,23 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         label.selected = selected;
                     }
                     const p = on ? toScreen(label.position, width, height) : null;
-                    if (p) clusterCandidates.push({ label, p, selected, d: label.position.distanceToSquared(starCamera.position) });
+                    if (p) clusterCandidates.push({ label, p, selected, kind, d: label.position.distanceToSquared(starCamera.position) });
                     else setLabel(label, null, 0, 0);
                 }
             }
             clusterCandidates.sort((a, b) => b.selected - a.selected || a.d - b.d);
-            for (const { label, p, selected } of clusterCandidates) {
+            for (const { label, p, selected, kind } of clusterCandidates) {
                 measure(label);
                 const box = { x: p[0] + 8, y: p[1] - 8, w: label.w, h: label.h };
+                // A dwarf galaxy's tries its left, then above, if its right
+                // is taken (the Magellanic Clouds often sit side by side)
+                if (kind === 'dwarf_galaxies' && !selected && hitsSky(box)) {
+                    box.x = p[0] - 8 - label.w;
+                    if (hitsSky(box)) {
+                        box.x = p[0] - label.w / 2;
+                        box.y = p[1] - 8 - label.h;
+                    }
+                }
                 const free = selected || !hitsSky(box);
                 if (free) skyBoxes.push(box);
                 setLabel(label, free ? [box.x, box.y] : null, 0, 0);
@@ -2735,6 +2744,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 </label>
                 <label
                     className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                    title="The small galaxies orbiting the Milky Way, at their measured distances (Local Volume Database, Pace 2025), the brightest labelled. Real, not part of the drawing"
+                >
+                    <input
+                        type="checkbox"
+                        checked={showClusters.dwarf_galaxies}
+                        disabled={!showGalaxy}
+                        onChange={(e) => showClusterKind('dwarf_galaxies', e.target.checked)}
+                    />
+                    <span className="universe-3d-swatch" style={{ background: '#cbbcff' }} />
+                    Dwarf galaxies (measured)
+                </label>
+                <label
+                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
                     title="The band across the sky: the model's starlight added up along each line of sight and dimmed by its dust, from wherever you are. Rendered, not a photo"
                 >
                     <input
@@ -2864,6 +2886,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         showGlobulars={clustersShown.globulars}
                         showOpenClusters={clustersShown.open_clusters}
                         showNebulae={clustersShown.nebulae}
+                        showDwarfs={clustersShown.dwarf_galaxies}
                         showHalo={showFarStars && showHaloStars && haloCount !== null}
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
