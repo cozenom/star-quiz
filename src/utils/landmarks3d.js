@@ -11,7 +11,8 @@
 // Cluster names from OpenNGC. Real, so shown from closer in than the model (like
 // the masers).
 //   - dwarf_galaxies: the Local Volume Database's (Pace 2025): a marker and
-//     a label; their stars are the RR Lyrae layer's (utils/farStars)
+//     a label, and Gaia's members (Pace, Erkal & Li 2022); the Magellanic
+//     Clouds' and Sagittarius's stars are the RR Lyrae layer's (utils/farStars)
 //
 // A globular is a soft glow with a Plummer profile (surface brightness
 // (1 + (R/a)^2)^-2, a = the half-light radius), out to GLOBULAR_RADII
@@ -62,10 +63,9 @@ const VIEW_RADII = 25;
 const VIEW_MIN_LY = 60;
 // A nebula's view: this many model radii from it
 const NEBULA_VIEW_RADII = 4;
-// A dwarf galaxy's view: this many half-light radii away, and far enough
-// back that the camera isn't inside its RR Lyrae's distance errors
-const DWARF_VIEW_RADII = 5;
-const DWARF_VIEW_MIN_LY = 30000;
+// A dwarf galaxy's view: this many half-light radii away, at least this far
+const DWARF_VIEW_RADII = 8;
+const DWARF_VIEW_MIN_LY = 2000;
 // A nebula's shell: brightness seen face on, and the least |cos| of the
 // angle to the shell's surface (the edge-on limit; a part's own, from its
 // wall's measured thickness, where known)

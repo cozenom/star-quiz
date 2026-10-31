@@ -57,6 +57,8 @@ const FAR_STARS_LOAD_LY = 30;
 // A kind of star cluster's stars load when the camera is this close to one
 // of them (ly), and has left the Solar System
 const CLUSTER_STARS_LOAD_LY = 2000;
+// The dwarf galaxies' are few, and seen from much further
+const DWARF_STARS_LOAD_LY = 200000;
 const SUN_BV = 0.65;
 
 // Stars fainter than this (seen from the camera) can't be picked or labelled
@@ -934,7 +936,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     }
                     const b = decodeClusterStars(buffers[0], g);
                     const points = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
-                    points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                    // A dwarf galaxy's are as far out as the halo's: they keep the floor too
+                    if (kind !== 'dwarf_galaxies') points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
                     clusterStars[kind] = points;
                     scene.add(points);
                     applyBloom();
@@ -1907,7 +1910,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 c.setVisible(wanted);
                 c.update(camera.position, mount.clientHeight, camera.fov);
                 if (wanted && (optionsRef.current.selectedCluster?.kind === kind
-                    || (camera.position.length() > FAR_STARS_LOAD_LY && c.nearest(camera.position) < CLUSTER_STARS_LOAD_LY))) {
+                    || (camera.position.length() > FAR_STARS_LOAD_LY
+                        && c.nearest(camera.position) < (kind === 'dwarf_galaxies' ? DWARF_STARS_LOAD_LY : CLUSTER_STARS_LOAD_LY)))) {
                     loadClusterStars(kind);
                 }
                 if (clusterStars[kind]) clusterStars[kind].visible = wanted;
@@ -1936,7 +1940,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             }
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
             starObjects().forEach(obj => {
-                if (obj !== sun && obj !== gaiaFaint && !haloPoints.includes(obj)) obj.material.uniforms.uMinAlpha.value = minAlpha;
+                if (obj !== sun && obj !== gaiaFaint && obj !== clusterStars.dwarf_galaxies && !haloPoints.includes(obj)) obj.material.uniforms.uMinAlpha.value = minAlpha;
             });
             // Gaia stars beyond 100 pc: the first tier and the RR Lyrae once
             // heading out, the fainter tiers down to farDepth when asked

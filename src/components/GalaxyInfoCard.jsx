@@ -26,7 +26,7 @@ export const GALAXY_KEY = [
     { color: hex(GLOBULAR_COLOR), globular: true, name: 'Globular clusters', about: 'Real, not drawn to match: 167 globular clusters at their measured distances, balls of hundreds of thousands of stars swarming round the centre in a halo, far above and below the disc. Each glows out to its true size when you get close.' },
     { color: hex(NEBULA_COLOR), nebula: true, name: 'Nebulae', about: 'Real, not drawn to match: the few nebulae whose 3D shape has been measured, each drawn from its published model at its measured distance. A dot from afar; fly close to see its shape: glowing gas, or dust lit by its star.' },
     { gradient: OPEN_AGE_COLORS.map(([, c]) => hex(c)), open: true, name: 'Open clusters', about: 'Real, not drawn to match: 4,000 open clusters found by Gaia, at their measured distances, coloured by age: blue for the young ones (a few million years), white, yellow, then orange for the old (billions). The youngest trace the spiral arms they formed in.' },
-    { color: hex(DWARF_COLOR), dwarf: true, name: 'Dwarf galaxies', about: 'Real, not drawn to match: the small galaxies orbiting the Milky Way, at their measured distances, the brightest labelled. The swarm of dots round one is its RR Lyrae stars, a tiny share of its stars, each at its own distance, so errors of a few percent stretch a small, faraway galaxy into a streak pointing back at the Sun.' },
+    { color: hex(DWARF_COLOR), dwarf: true, name: 'Dwarf galaxies', about: 'Real, not drawn to match: the small galaxies orbiting the Milky Way, at their measured distances, the brightest labelled. Fly to one to see the members Gaia picked out, the brightest of its stars. The Magellanic Clouds and Sagittarius show only their RR Lyrae stars, each at its own distance, so errors of a few percent stretch them along our line of sight.' },
 ];
 
 // A key swatch: a dot, a ring for the masers' markers, or a short line
@@ -345,6 +345,13 @@ export function ClusterInfoCard({ info, text, onView, onClose }) {
             ? <>{info.constellation}, magnitude {info.vmag.toFixed(1)}
                 <span className="star-info-muted">{info.vmag <= 6 ? ' · visible to the naked eye from a dark site' : ' · a telescope'}</span></>
             : info.constellation],
+        ['Stars drawn', info.starCount > 0
+            ? <>{fmt(info.starCount)} members found by Gaia
+                <div className="star-info-muted">
+                    only its brightest stars; each at the galaxy&apos;s distance, with a depth drawn from its size
+                </div></>
+            : <>Only RR Lyrae stars, where any are known
+                <div className="star-info-muted">each at its own measured distance</div></>],
     ] : info.kind === 'nebulae' ? [
         ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">± {ly(info.distanceErr)} ly</span></>],
         ['Size', `${size(2 * info.radius)} ly across`],
