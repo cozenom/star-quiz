@@ -48,7 +48,6 @@ function KeybindsPanel({ screen }) {
                     { keys: ['Right-drag'], label: 'Pan' },
                     { keys: ['L'], label: 'Show/hide lines' },
                     { keys: ['N'], label: 'Show/hide names' },
-                    { keys: ['H'], label: 'Haze on/off' },
                     { keys: ['R'], label: 'Reset view (back to Earth)' },
                     { keys: ['Space'], label: 'Play / pause time' },
                     { keys: ['[', ']'], label: 'Time slower / faster' },

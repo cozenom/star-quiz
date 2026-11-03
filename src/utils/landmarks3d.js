@@ -54,6 +54,16 @@ const KIND = {
 };
 export const LANDMARK_KINDS = Object.keys(KIND);
 const GLOBULAR_RADII = 3;
+// A dwarf galaxy's Gaia stars keep the dim-dot floor (they're as far out
+// as the halo's), but only while they're spread out on screen: the half
+// within its half-light radius at least this far apart (px). From afar
+// its thousands of dots would pile into a few pixels and burn white,
+// where the real galaxy is ~10 magnitudes fainter than ours. Its dot
+// gives way to them at the same rate.
+const DWARF_FLOOR_SPACING_PX = 2;
+// Share of the floor a dwarf galaxy's stars get (0..1): rhPx its
+// half-light radius on screen (CSS px), crowd its stars within it
+export const dwarfFloor = (rhPx, crowd) => Math.min(1, Math.PI * rhPx * rhPx / crowd / DWARF_FLOOR_SPACING_PX ** 2);
 const MAX_PX = 900;
 // Shown between these camera distances from the Sun (ly)
 const FADE_IN_LY = [1000, 3000];
@@ -84,6 +94,7 @@ const vertexShader = /* glsl */ `
     attribute float radius;      // half-light / half-member radius (ly)
     attribute float marker;      // marker diameter (px)
     attribute float unresolved;  // share of its light Gaia's stars don't hold
+    attribute float crowd;       // a dwarf galaxy's stars within its half-light radius (0: none, other kinds)
     uniform float uFocalPx;      // px per unit at distance 1
     uniform float uPixelRatio;
     uniform float uStarsOn;      // 1 while its stars are drawn
@@ -96,8 +107,12 @@ const vertexShader = /* glsl */ `
         float m = marker * uPixelRatio;
         gl_PointSize = clamp(uGlow > 0.5 ? max(m, world) : m, 1.0, ${MAX_PX.toFixed(1)});
         // Once it's bigger than its marker its stars show: a glow keeps the
-        // light they don't hold, a dot goes
-        float near = smoothstep(m, 4.0 * m, world) * uStarsOn;
+        // light they don't hold, a dot goes (a dwarf galaxy's as its stars'
+        // floor comes in, see dwarfFloor)
+        float rhPx = radius * uFocalPx / uPixelRatio / max(-mv.z, 1e-3);
+        float near = (crowd > 0.0
+            ? min(1.0, 3.14159265 * rhPx * rhPx / crowd / ${(DWARF_FLOOR_SPACING_PX ** 2).toFixed(1)})
+            : smoothstep(m, 4.0 * m, world)) * uStarsOn;
         vBright = uGlow > 0.5 ? mix(1.0, unresolved, near) : 1.0 - near;
         vColor = color;
         gl_Position = projectionMatrix * mv;
@@ -548,6 +563,8 @@ export function buildClusters(scene, kind, g, pixelRatio) {
     const radius = new Float32Array(n);
     const marker = new Float32Array(n);
     const unresolved = new Float32Array(n);
+    const crowd = new Float32Array(n);
+    if (kind === 'dwarf_galaxies') g.stars?.clusters.forEach(c => { crowd[c.cluster] = c.count / 2; });
     const colors = new Float32Array(n * 3);
     const globularColor = rgb(GLOBULAR_COLOR);
     for (let i = 0; i < n; i++) {
@@ -566,6 +583,7 @@ export function buildClusters(scene, kind, g, pixelRatio) {
     geometry.setAttribute('radius', new THREE.BufferAttribute(radius, 1));
     geometry.setAttribute('marker', new THREE.BufferAttribute(marker, 1));
     geometry.setAttribute('unresolved', new THREE.BufferAttribute(unresolved, 1));
+    geometry.setAttribute('crowd', new THREE.BufferAttribute(crowd, 1));
     const material = new THREE.ShaderMaterial({
         uniforms: {
             uFocalPx: { value: 1 },

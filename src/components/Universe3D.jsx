@@ -14,7 +14,7 @@ import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { createDustMap, dustMapSource } from '../utils/dustMap';
-import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars } from '../utils/landmarks3d';
+import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars, dwarfFloor } from '../utils/landmarks3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -64,14 +64,14 @@ const SUN_BV = 0.65;
 
 // Stars fainter than this (seen from the camera) can't be picked or labelled
 const PICK_MAG_LIMIT = 7.0;
-// Glow that follows brightness (trial): a star or planet brighter than
+// Glow that follows brightness: a star or planet brighter than
 // GLARE_MAG gets a spike at its centre, brighter than white and scaled by
 // its light: GLARE_PEAK at the light of a GLARE_MAG star, phased in over the
 // magnitude above it, levelling off for the brightest (see utils/starSprite).
 // The bloom then only
 // takes light above GLARE_THRESHOLD, over any plain sprite's peak
 // (1.35-1.65 x its colour, plus the band), so each glow grows with its light.
-// GLARE_MAG and GLARE_PEAK are the defaults of the trial's sliders.
+// Off on touch devices (bloom is heavy for phone GPUs).
 const GLARE_MAG = 1.0;
 const GLARE_PEAK = 0.35;
 const GLARE_THRESHOLD = 1.6;
@@ -583,14 +583,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     // Earth from outside (see bodyPose / resetView).
     // {type: 'body', id} | {type: 'star', index} | {type: 'constellation'} | {type: 'none'}
     const [focus, setFocus] = useState(() => (planetFacts ? { type: 'body', id: 'Earth' } : { type: 'none' }));
-    // Haze: the plain bloom, on every pixel brighter than 0.6
-    const [showHaze, setShowHaze] = useState(false);
-    // Trial: only bright stars glow, each by its light (GLARE_MAG). Off by
-    // default on touch devices (bloom is heavy for phone GPUs).
-    const [glowFollowsBrightness, setGlowFollowsBrightness] = useState(() => !window.matchMedia('(pointer: coarse)').matches);
-    // Trial sliders: where the glow starts (mag) and its strength (x GLARE_PEAK)
-    const [glareMag, setGlareMag] = useState(GLARE_MAG);
-    const [glareStrength, setGlareStrength] = useState(1);
     const mountRef = useRef(null);
     const labelsRef = useRef(null);
     const tooltipRef = useRef(null);
@@ -882,7 +874,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             });
         };
         // Every star Points, for the settings they share
-        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...Object.values(clusterStars)].filter(Boolean);
+        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints()].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -917,7 +909,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // of them, or one is opened
         const clusters = {};       // kind -> buildClusters
         const clusterData = {};    // kind -> landmarks.json[kind]
-        const clusterStars = {};   // kind -> star Points, once loaded
+        const clusterStars = {};   // kind -> star Points, once loaded (dwarf galaxies: a Group of one per galaxy)
+        const clusterStarPoints = () => Object.values(clusterStars).flatMap(o => (o.isGroup ? o.children : [o]));
         const clusterStarsRequested = new Set();
         let disposed = false;
         const loadClusterStars = (kind) => {
@@ -937,11 +930,22 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         return;
                     }
                     const b = decodeClusterStars(buffers[0], g);
-                    const points = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
-                    // A dwarf galaxy's are as far out as the halo's: they keep the floor too
-                    if (kind !== 'dwarf_galaxies') points.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
-                    clusterStars[kind] = points;
-                    scene.add(points);
+                    if (kind === 'dwarf_galaxies') {
+                        // One Points per galaxy, each with its own floor (utils/landmarks3d dwarfFloor)
+                        const group = new THREE.Group();
+                        for (const c of g.stars.clusters) {
+                            const [from, to] = [c.start, c.start + c.count];
+                            const points = makeStarPoints(b.positions.slice(3 * from, 3 * to), b.colors.slice(3 * from, 3 * to),
+                                b.absMags.slice(from, to), pixelRatio, starCameraUniforms);
+                            points.userData.dwarf = { centre: new THREE.Vector3().fromArray(g.xyz_ly, 3 * c.cluster), rh: g.rh_ly[c.cluster], crowd: c.count / 2 };
+                            group.add(points);
+                        }
+                        clusterStars[kind] = group;
+                    } else {
+                        clusterStars[kind] = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
+                        clusterStars[kind].material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                    }
+                    scene.add(clusterStars[kind]);
                     applyBloom();
                 })
                 .catch((error) => {
@@ -987,21 +991,18 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
 
         // Everything renders through this composer, in linear light: colours
         // add up in a half-float buffer, as light does, and go to sRGB once
-        // at the end. Haze (s.haze) adds the plain bloom, glow following
-        // brightness (s.glare) the glare pass; each on its own.
+        // at the end. The glare pass makes the brightest stars and planets
+        // glow by their light (GLARE_MAG), except on touch devices (lite).
         const composer = new EffectComposer(renderer);
         const layerPasses = addLayerPasses(composer, layers);
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 0.6);
         const glarePass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, GLARE_THRESHOLD);
         glarePass.materialHighPassFilter.fragmentShader = glareHighPassShader;
-        composer.addPass(bloomPass);
         composer.addPass(glarePass);
         composer.addPass(new OutputPass());
 
         const s = {
             scene, camera, controls, selectedRing, bodySelectedRing, solar, cloud,
-            selectedLines: null, allLines: null, flight: null, haze: false, glare: false,
-            glareMag: GLARE_MAG, glarePeak: GLARE_PEAK,
+            selectedLines: null, allLines: null, flight: null,
             // Earth in ly from the Sun; everything Earth-relative reads this
             earthPosition,
             bodyPose,
@@ -1022,31 +1023,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // Centred on something (the footer names it); panning away clears it
         s.focused = true;
         // The stars' and planets' glare spikes only with the glare pass on:
-        // without it they'd just be drawn
+        // without it they'd just be drawn. Again for each star set that loads.
         const applyBloom = () => {
-            bloomPass.enabled = s.haze;
-            glarePass.enabled = s.glare;
-            const peak = s.glare ? s.glarePeak : 0;
+            glarePass.enabled = !lite;
+            const peak = lite ? 0 : GLARE_PEAK;
             starObjects().forEach(obj => {
                 obj.material.uniforms.uGlare.value = peak;
-                obj.material.uniforms.uGlareMag.value = s.glareMag;
+                obj.material.uniforms.uGlareMag.value = GLARE_MAG;
             });
-            solar?.setGlare(peak, s.glareMag);
+            solar?.setGlare(peak, GLARE_MAG);
         };
-        s.setHaze = (on) => {
-            s.haze = on;
-            applyBloom();
-        };
-        s.setGlare = (on) => {
-            s.glare = on;
-            applyBloom();
-        };
-        // Trial sliders: where the glow starts (mag) and the spike's peak
-        s.setGlareTuning = (mag, peak) => {
-            s.glareMag = mag;
-            s.glarePeak = peak;
-            applyBloom();
-        };
+        applyBloom();
         sceneRef.current = s;
 
         // ---------- Camera flights ----------
@@ -1942,7 +1929,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             }
             const minAlpha = STAR_MIN_ALPHA * (1 - THREE.MathUtils.smoothstep(camera.position.length(), ...GALAXY_FADE_IN_LY));
             starObjects().forEach(obj => {
-                if (obj !== sun && obj !== gaiaFaint && obj !== clusterStars.dwarf_galaxies && !haloPoints.includes(obj)) obj.material.uniforms.uMinAlpha.value = minAlpha;
+                if (obj !== sun && obj !== gaiaFaint && !obj.userData.dwarf && !haloPoints.includes(obj)) obj.material.uniforms.uMinAlpha.value = minAlpha;
+            });
+            const focalPx = mount.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+            clusterStars.dwarf_galaxies?.children.forEach(points => {
+                const { centre, rh, crowd } = points.userData.dwarf;
+                const rhPx = rh * focalPx / Math.max(centre.distanceTo(camera.position), 1e-9);
+                points.material.uniforms.uMinAlpha.value = STAR_MIN_ALPHA * dwarfFloor(rhPx, crowd);
             });
             // Gaia stars beyond 100 pc: the first tier and the RR Lyrae once
             // heading out, the fainter tiers down to farDepth when asked
@@ -1995,7 +1988,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             controls.dispose();
             farDisposed = true;
             [farDecoding, haloDecoding].forEach(decoding => decoding?.uBvTable.value.dispose());
-            [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...Object.values(clusterStars), hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
+            [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints(), hoverRing, selectedRing, bodyHoverRing, bodySelectedRing, earthMarkerNear, earthMarkerFar, s.selectedLines, s.allLines]
                 .forEach(disposeObject);
             solar?.dispose();
             cloud?.dispose();
@@ -2007,7 +2000,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             Object.values(clusters).forEach(c => c.dispose());
             dust.dispose();
             starDisc.dispose();
-            bloomPass.dispose();
             glarePass.dispose();
             composer.dispose();
             renderer.dispose();
@@ -2263,18 +2255,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     }, [showLines, lineKinds, starBuffers, planetFacts, moonsData, smallBodies]);
 
     useEffect(() => {
-        sceneRef.current?.setHaze(showHaze);
-    }, [showHaze, starBuffers]);
-
-    useEffect(() => {
-        sceneRef.current?.setGlare(glowFollowsBrightness);
-    }, [glowFollowsBrightness, starBuffers]);
-
-    useEffect(() => {
-        sceneRef.current?.setGlareTuning(glareMag, GLARE_PEAK * glareStrength);
-    }, [glareMag, glareStrength, starBuffers]);
-
-    useEffect(() => {
         sceneRef.current?.solar?.setShowMinorMoons(showSmallMoons);
     }, [showSmallMoons, starBuffers, planetFacts, moonsData]);
 
@@ -2399,7 +2379,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             if (e.code === 'BracketLeft') changeSpeed(-1);
             if (e.code === 'BracketRight') changeSpeed(1);
             if (e.code === 'KeyT') goToNow();
-            if (e.code === 'KeyH') setShowHaze(prev => !prev);
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
@@ -2542,48 +2521,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         />
                         Show names
                     </label>
-                    <label className="universe-3d-checkbox" title="Bloom on everything bright: every star brighter than about mag 5 glows">
-                        <input
-                            type="checkbox"
-                            checked={showHaze}
-                            onChange={(e) => setShowHaze(e.target.checked)}
-                        />
-                        Haze
-                    </label>
-                    <label className="universe-3d-checkbox" title="Only stars brighter than about mag 1 glow, each by how much light it gives">
-                        <input
-                            type="checkbox"
-                            checked={glowFollowsBrightness}
-                            onChange={(e) => setGlowFollowsBrightness(e.target.checked)}
-                        />
-                        Glow follows brightness
-                    </label>
-                    {glowFollowsBrightness && (
-                        <div className="universe-3d-glare-tuning universe-3d-sub-option">
-                            <label>
-                                <span>From mag {glareMag.toFixed(1)}</span>
-                                <input
-                                    type="range"
-                                    min="-1.5"
-                                    max="5"
-                                    step="0.1"
-                                    value={glareMag}
-                                    onChange={(e) => setGlareMag(Number(e.target.value))}
-                                />
-                            </label>
-                            <label>
-                                <span>Strength ×{glareStrength.toFixed(2)}</span>
-                                <input
-                                    type="range"
-                                    min="-2"
-                                    max="4"
-                                    step="0.1"
-                                    value={Math.log2(glareStrength)}
-                                    onChange={(e) => setGlareStrength(2 ** Number(e.target.value))}
-                                />
-                            </label>
-                        </div>
-                    )}
                 </Universe3DSection>
                 <Universe3DSection id="stars" title="Stars">
                     <label
