@@ -87,6 +87,10 @@ function StarInfoCard({ star, lineInfo, onClose, onFlyTo, onFocus }) {
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             <h3 className="star-info-title">{title}</h3>
             <div className="star-info-subtitle">{subtitle}</div>
+            <div className="star-info-actions">
+                <button className="button-secondary star-info-fly" onClick={onFocus} title="Turn to face it without moving">Focus on</button>
+                <button className="button-primary star-info-fly" onClick={onFlyTo}>Fly to star</button>
+            </div>
 
             <dl className="star-info-facts">
                 <dt>Distance {isApprox && <span className="star-info-approx">approx.</span>}</dt>
@@ -130,11 +134,6 @@ function StarInfoCard({ star, lineInfo, onClose, onFlyTo, onFocus }) {
                     <strong>Name origin{lineInfo.culturalGroup ? ` (${lineInfo.culturalGroup})` : ''}:</strong> {lineInfo.origin}
                 </p>
             )}
-
-            <div className="star-info-actions">
-                <button className="button-secondary star-info-fly" onClick={onFocus} title="Turn to face it without moving">Focus on</button>
-                <button className="button-primary star-info-fly" onClick={onFlyTo}>Fly to star</button>
-            </div>
         </div>
     );
 }

@@ -60,6 +60,11 @@ function SmallBodyInfoCard({ body, distances, time, onClose, onFlyTo }) {
                 {SMALL_BODY_TYPE_LABELS[b.type]}{classLabel && ` · ${classLabel}`}
                 {b.fullname !== b.name && <div className="star-info-muted">{b.fullname}</div>}
             </div>
+            <div className="star-info-actions">
+                <button className="button-primary star-info-fly" onClick={onFlyTo}>
+                    Fly to {b.name}
+                </button>
+            </div>
 
             <dl className="star-info-facts">
                 <dt>From Earth</dt>
@@ -138,10 +143,6 @@ function SmallBodyInfoCard({ body, distances, time, onClose, onFlyTo }) {
                         + (years[0] > 1600 || years[1] < 2499 ? ': only approximate outside those years.' : '.')
                     : 'Position from its orbit around the Sun alone (JPL Small-Body Database): close for years around now, drifting over decades as the planets tug it.'}
             </p>
-
-            <button className="button-primary star-info-fly" onClick={onFlyTo}>
-                Fly to {b.name}
-            </button>
         </div>
     );
 }

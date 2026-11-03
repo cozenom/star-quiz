@@ -14,6 +14,11 @@ function RingInfoCard({ feature: f, onClose, onView }) {
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             <h3 className="star-info-title">{f.name}</h3>
             <div className="star-info-subtitle">{ringSubtitle(f)}</div>
+            <div className="star-info-actions">
+                <button className="button-primary star-info-fly" onClick={onView}>
+                    {f.kind === 'gap' ? 'View the gap' : f.kind === 'group' ? 'View the rings' : 'View the ring'}
+                </button>
+            </div>
 
             <dl className="star-info-facts">
                 <dt>From {f.planet}</dt>
@@ -37,10 +42,6 @@ function RingInfoCard({ feature: f, onClose, onView }) {
             </dl>
 
             <p className="star-info-origin">{f.note}</p>
-
-            <button className="button-primary star-info-fly" onClick={onView}>
-                {f.kind === 'gap' ? 'View the gap' : f.kind === 'group' ? 'View the rings' : 'View the ring'}
-            </button>
         </div>
     );
 }

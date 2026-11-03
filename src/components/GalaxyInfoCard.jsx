@@ -140,11 +140,12 @@ function Links({ current, cards, onSelect }) {
     );
 }
 
-function MilkyWay({ card }) {
+function MilkyWay({ card, actions }) {
     return (
         <>
             <h3 className="star-info-title">Milky Way</h3>
             <div className="star-info-subtitle">Our galaxy · barred spiral · drawn as a model</div>
+            {actions}
             <p className="star-info-origin">{card.about}</p>
             <Facts rows={[
                 ['The Sun', `${fmt(card.sun_distance)} ly from the centre, ${card.sun_height} ly above the middle of the disc`],
@@ -186,11 +187,12 @@ function MilkyWay({ card }) {
     );
 }
 
-function Centre({ card, bar, onSelectMaser }) {
+function Centre({ card, bar, onSelectMaser, actions }) {
     return (
         <>
             <h3 className="star-info-title">Galactic Centre</h3>
             <div className="star-info-subtitle">Sagittarius A* · supermassive black hole</div>
+            {actions}
             <p className="star-info-origin">{card.about}</p>
             <Facts rows={[
                 ['Distance', `${fmt(card.distance)} ly, in ${card.constellation}`],
@@ -205,7 +207,7 @@ function Centre({ card, bar, onSelectMaser }) {
     );
 }
 
-function Arm({ id, card, maserShort, onSelectMaser }) {
+function Arm({ id, card, maserShort, onSelectMaser, actions }) {
     // The Sun is inside an arm when it is within the arm's width of its middle
     const inside = card.nearest < card.width / 2;
     // Per measured segment (Norma and Outer for the Norma–Outer arm), the
@@ -216,6 +218,7 @@ function Arm({ id, card, maserShort, onSelectMaser }) {
         <>
             <h3 className="star-info-title">{ARM_LABELS[id]}</h3>
             <div className="star-info-subtitle">{id === 'Local' ? 'Arm segment · the Sun is in it' : 'Major spiral arm'}</div>
+            {actions}
             <p className="star-info-origin">{card.about}</p>
             <Facts rows={[
                 inside
@@ -241,15 +244,20 @@ function Arm({ id, card, maserShort, onSelectMaser }) {
 // onView flies the camera to this one
 function GalaxyInfoCard({ id, cards, onSelect, onSelectMaser, onView, onClose }) {
     const arm = cards.arms[id];
-    return (
-        <div className="star-info region-info">
-            <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
-            {id === 'milky_way' && <MilkyWay card={cards.milky_way} />}
-            {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} onSelectMaser={onSelectMaser} />}
-            {arm && <Arm id={id} card={arm} maserShort={cards.milky_way.maser_short} onSelectMaser={onSelectMaser} />}
+    // (under the title, which each part draws)
+    const actions = (
+        <div className="star-info-actions">
             <button className="button-primary star-info-fly" onClick={onView}>
                 {id === 'milky_way' ? 'View the whole galaxy' : 'Fly there'}
             </button>
+        </div>
+    );
+    return (
+        <div className="star-info region-info">
+            <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
+            {id === 'milky_way' && <MilkyWay card={cards.milky_way} actions={actions} />}
+            {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} onSelectMaser={onSelectMaser} actions={actions} />}
+            {arm && <Arm id={id} card={arm} maserShort={cards.milky_way.maser_short} onSelectMaser={onSelectMaser} actions={actions} />}
             <Links current={id} cards={cards} onSelect={onSelect} />
         </div>
     );
@@ -304,6 +312,9 @@ export function MaserInfoCard({ info, cards, onArm, onView, onClose }) {
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             <h3 className="star-info-title">{info.name}</h3>
             <div className="star-info-subtitle">Maser · {info.armName}</div>
+            <div className="star-info-actions">
+                <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
+            </div>
             {info.note && <p className="star-info-origin">{info.note}</p>}
             <Facts rows={[
                 ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">± {info.errorPct}%</span>
@@ -326,7 +337,6 @@ export function MaserInfoCard({ info, cards, onArm, onView, onClose }) {
             <p className="star-info-muted">
                 From Reid et al. 2019, ApJ 885, 131, Table 1, which collects these measurements; the motion uses the Sun&apos;s own from their fit A5.
             </p>
-            <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
         </div>
     );
 }
@@ -391,13 +401,15 @@ export function ClusterInfoCard({ info, text, onView, onClose }) {
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             <h3 className="star-info-title">{info.name}</h3>
             <div className="star-info-subtitle">{LANDMARK_NAMES[info.kind][0]}{info.title ? ` · ${info.title}` : ''}</div>
+            <div className="star-info-actions">
+                <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
+            </div>
             {info.superlative && <p className="star-info-origin"><strong>{info.superlative}.</strong></p>}
             {info.note && <p className="star-info-origin">{info.note}</p>}
             {info.about && <p className="star-info-origin">{info.about}</p>}
             <Facts rows={rows} />
             <p className="star-info-muted star-info-origin">{text.about}</p>
             <Sources refs={[...text.refs, ...(info.refs ?? []), info.starCount > 0 && info.starsRef, info.noteRef]} />
-            <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
         </div>
     );
 }

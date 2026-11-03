@@ -42,6 +42,7 @@ import RingInfoCard from './RingInfoCard';
 import SmallBodyInfoCard from './SmallBodyInfoCard';
 import StarInfoCard from './StarInfoCard';
 import Universe3DSearch from './Universe3DSearch';
+import Universe3DSection from './Universe3DSection';
 import Universe3DTimeBar, { nextPresetRate, TIME_RANGE } from './Universe3DTimeBar';
 import './Universe3D.css';
 
@@ -2489,7 +2490,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             <div className="universe-3d-labels" ref={labelsRef} />
             <div className="universe-3d-tooltip" ref={tooltipRef} />
 
-            <button className="back-button" onClick={onBack}>← Back</button>
+            <button className="back-button universe-3d-back" onClick={onBack} aria-label="Back">
+                ←<span className="universe-3d-back-label">Back</span>
+            </button>
 
             <Universe3DSearch items={searchItems} starBuffers={starBuffers} onSelect={handleSearchSelect} />
 
@@ -2502,79 +2505,127 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             </button>
 
             <div ref={panelRef} className={`universe-3d-panel ${panelOpen ? 'open' : ''}`}>
-                <label className="universe-3d-checkbox">
-                    <input
-                        type="checkbox"
-                        checked={showLines}
-                        onChange={(e) => setShowLines(e.target.checked)}
-                    />
-                    Show lines
-                </label>
-                {LINE_OPTIONS.filter(o => planetFacts || o.needs !== 'planets').map(o => {
-                    const off = !showLines
-                        || (o.needs === 'planets' && !showPlanets)
-                        || (o.needs === 'masers' && !(showGalaxy && showMasers));
-                    return (
-                        <label key={o.kind} className={`universe-3d-checkbox universe-3d-sub-option ${off ? 'disabled' : ''}`} title={o.title}>
-                            <input
-                                type="checkbox"
-                                checked={lineKinds[o.kind]}
-                                disabled={off}
-                                onChange={(e) => setLineKinds(prev => ({ ...prev, [o.kind]: e.target.checked }))}
-                            />
-                            {o.label}
-                        </label>
-                    );
-                })}
-                <label className="universe-3d-checkbox">
-                    <input
-                        type="checkbox"
-                        checked={showLabels}
-                        onChange={(e) => setShowLabels(e.target.checked)}
-                    />
-                    Show names
-                </label>
-                <label
-                    className="universe-3d-checkbox"
-                    title="Gaia's stars beyond 330 ly with distances good to 5%, at their measured positions (out to ~19,000 ly): they show as you fly out among the stars"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showFarStars}
-                        onChange={(e) => setShowFarStars(e.target.checked)}
-                    />
-                    Distant stars (Gaia)
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}
-                    title="How faint the Gaia stars go (G: Gaia's magnitude, as seen from Earth). The fainter tiers are large downloads, heavy for phones."
-                >
-                    <select
-                        value={farDepth}
-                        disabled={!showFarStars}
-                        onChange={(e) => setFarDepth(Number(e.target.value))}
+                <Universe3DSection id="lines" title="Lines">
+                    <label className="universe-3d-checkbox">
+                        <input
+                            type="checkbox"
+                            checked={showLines}
+                            onChange={(e) => setShowLines(e.target.checked)}
+                        />
+                        Show lines
+                    </label>
+                    {LINE_OPTIONS.filter(o => planetFacts || o.needs !== 'planets').map(o => {
+                        const off = !showLines
+                            || (o.needs === 'planets' && !showPlanets)
+                            || (o.needs === 'masers' && !(showGalaxy && showMasers));
+                        return (
+                            <label key={o.kind} className={`universe-3d-checkbox universe-3d-sub-option ${off ? 'disabled' : ''}`} title={o.title}>
+                                <input
+                                    type="checkbox"
+                                    checked={lineKinds[o.kind]}
+                                    disabled={off}
+                                    onChange={(e) => setLineKinds(prev => ({ ...prev, [o.kind]: e.target.checked }))}
+                                />
+                                {o.label}
+                            </label>
+                        );
+                    })}
+                </Universe3DSection>
+                <Universe3DSection id="view" title="View">
+                    <label className="universe-3d-checkbox">
+                        <input
+                            type="checkbox"
+                            checked={showLabels}
+                            onChange={(e) => setShowLabels(e.target.checked)}
+                        />
+                        Show names
+                    </label>
+                    <label className="universe-3d-checkbox" title="Bloom on everything bright: every star brighter than about mag 5 glows">
+                        <input
+                            type="checkbox"
+                            checked={showHaze}
+                            onChange={(e) => setShowHaze(e.target.checked)}
+                        />
+                        Haze
+                    </label>
+                    <label className="universe-3d-checkbox" title="Only stars brighter than about mag 1 glow, each by how much light it gives">
+                        <input
+                            type="checkbox"
+                            checked={glowFollowsBrightness}
+                            onChange={(e) => setGlowFollowsBrightness(e.target.checked)}
+                        />
+                        Glow follows brightness
+                    </label>
+                    {glowFollowsBrightness && (
+                        <div className="universe-3d-glare-tuning universe-3d-sub-option">
+                            <label>
+                                <span>From mag {glareMag.toFixed(1)}</span>
+                                <input
+                                    type="range"
+                                    min="-1.5"
+                                    max="5"
+                                    step="0.1"
+                                    value={glareMag}
+                                    onChange={(e) => setGlareMag(Number(e.target.value))}
+                                />
+                            </label>
+                            <label>
+                                <span>Strength ×{glareStrength.toFixed(2)}</span>
+                                <input
+                                    type="range"
+                                    min="-2"
+                                    max="4"
+                                    step="0.1"
+                                    value={Math.log2(glareStrength)}
+                                    onChange={(e) => setGlareStrength(2 ** Number(e.target.value))}
+                                />
+                            </label>
+                        </div>
+                    )}
+                </Universe3DSection>
+                <Universe3DSection id="stars" title="Stars">
+                    <label
+                        className="universe-3d-checkbox"
+                        title="Gaia's stars beyond 330 ly with distances good to 5%, at their measured positions (out to ~19,000 ly): they show as you fly out among the stars"
                     >
-                        {farMeta
-                            ? farMeta.tiers.map((tier, k) => <option key={k} value={k}>{farDepthLabel(farMeta, k)}</option>)
-                            : <option value={0}>Brightest</option>}
-                    </select>
-                    {farMoreState === 'loading' && 'Loading…'}
-                    {farMoreState === 'error' && <span className="universe-3d-error-note">(failed)</span>}
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}
-                    title={`${haloCount ? haloCount.toLocaleString() : 'All of Gaia\'s'} RR Lyrae stars, at distances from their pulsation (out to ~470,000 ly): the halo round the disc, the Sagittarius stream, the Magellanic Clouds. Each stands in for many thousands of fainter halo stars, so they stay a faint dot from afar.`}
-                >
-                    <input
-                        type="checkbox"
-                        checked={showHaloStars}
-                        disabled={!showFarStars}
-                        onChange={(e) => setShowHaloStars(e.target.checked)}
-                    />
-                    Halo (RR Lyrae)
-                </label>
+                        <input
+                            type="checkbox"
+                            checked={showFarStars}
+                            onChange={(e) => setShowFarStars(e.target.checked)}
+                        />
+                        Distant stars (Gaia)
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}
+                        title="How faint the Gaia stars go (G: Gaia's magnitude, as seen from Earth). The fainter tiers are large downloads, heavy for phones."
+                    >
+                        <select
+                            value={farDepth}
+                            disabled={!showFarStars}
+                            onChange={(e) => setFarDepth(Number(e.target.value))}
+                        >
+                            {farMeta
+                                ? farMeta.tiers.map((tier, k) => <option key={k} value={k}>{farDepthLabel(farMeta, k)}</option>)
+                                : <option value={0}>Brightest</option>}
+                        </select>
+                        {farMoreState === 'loading' && 'Loading…'}
+                        {farMoreState === 'error' && <span className="universe-3d-error-note">(failed)</span>}
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showFarStars ? '' : 'disabled'}`}
+                        title={`${haloCount ? haloCount.toLocaleString() : 'All of Gaia\'s'} RR Lyrae stars, at distances from their pulsation (out to ~470,000 ly): the halo round the disc, the Sagittarius stream, the Magellanic Clouds. Each stands in for many thousands of fainter halo stars, so they stay a faint dot from afar.`}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showHaloStars}
+                            disabled={!showFarStars}
+                            onChange={(e) => setShowHaloStars(e.target.checked)}
+                        />
+                        Halo (RR Lyrae)
+                    </label>
+                </Universe3DSection>
                 {planetFacts && (
-                    <>
+                    <Universe3DSection id="solar" title="Solar system">
                         <label className="universe-3d-checkbox">
                             <input
                                 type="checkbox"
@@ -2671,160 +2722,120 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                                 )}
                             </>
                         )}
-                    </>
+                    </Universe3DSection>
                 )}
-                <div className="universe-3d-option-row">
+                <Universe3DSection id="galaxy" title="Milky Way">
+                    <div className="universe-3d-option-row">
+                        <label
+                            className="universe-3d-checkbox"
+                            title="Fly out past the stars to see it: the bar, arms and dust drawn from published measurements (Reid et al. 2019 and others)"
+                        >
+                            <input
+                                type="checkbox"
+                                checked={showGalaxy}
+                                onChange={(e) => setShowGalaxy(e.target.checked)}
+                            />
+                            Milky Way (model)
+                        </label>
+                        <button
+                            className="universe-3d-info-button"
+                            onClick={() => openGalaxyCard('milky_way')}
+                            title="About the Milky Way and what the model's colours mean"
+                            aria-label="About the Milky Way model"
+                        >
+                            ?
+                        </button>
+                    </div>
                     <label
-                        className="universe-3d-checkbox"
-                        title="Fly out past the stars to see it: the bar, arms and dust drawn from published measurements (Reid et al. 2019 and others)"
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                        title="The 199 masers whose parallaxes trace the arms (Reid et al. 2019), at their measured distances: real, not part of the drawing"
                     >
                         <input
                             type="checkbox"
-                            checked={showGalaxy}
-                            onChange={(e) => setShowGalaxy(e.target.checked)}
+                            checked={showMasers}
+                            disabled={!showGalaxy}
+                            onChange={(e) => setShowMasers(e.target.checked)}
                         />
-                        Milky Way (model)
+                        <span className="universe-3d-swatch" style={{ background: 'transparent', border: '2px solid #5eead4' }} />
+                        Masers (measured)
                     </label>
-                    <button
-                        className="universe-3d-info-button"
-                        onClick={() => openGalaxyCard('milky_way')}
-                        title="About the Milky Way and what the model's colours mean"
-                        aria-label="About the Milky Way model"
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                        title="The Milky Way's 167 globular clusters at their measured distances (Baumgardt & Vasiliev 2021): real, not part of the drawing"
                     >
-                        ?
-                    </button>
-                </div>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
-                    title="The 199 masers whose parallaxes trace the arms (Reid et al. 2019), at their measured distances: real, not part of the drawing"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showMasers}
-                        disabled={!showGalaxy}
-                        onChange={(e) => setShowMasers(e.target.checked)}
-                    />
-                    <span className="universe-3d-swatch" style={{ background: 'transparent', border: '2px solid #5eead4' }} />
-                    Masers (measured)
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
-                    title="The Milky Way's 167 globular clusters at their measured distances (Baumgardt & Vasiliev 2021): real, not part of the drawing"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showClusters.globulars}
-                        disabled={!showGalaxy}
-                        onChange={(e) => showClusterKind('globulars', e.target.checked)}
-                    />
-                    <span className="universe-3d-swatch" style={{ background: '#ffe2ad' }} />
-                    Globular clusters (measured)
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
-                    title="4,000 open clusters found in Gaia DR3 (Hunt & Reffert 2023), at their measured distances, coloured by age: blue young, orange old. Real, not part of the drawing"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showClusters.open_clusters}
-                        disabled={!showGalaxy}
-                        onChange={(e) => showClusterKind('open_clusters', e.target.checked)}
-                    />
-                    <span className="universe-3d-swatch" style={{ background: 'linear-gradient(90deg, #9fc4ff, #ffe0a0, #ff9e60)' }} />
-                    Open clusters (measured)
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
-                    title="Nebulae whose 3D shape has been measured, each drawn from its published model at its measured distance. Real, not part of the drawing"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showClusters.nebulae}
-                        disabled={!showGalaxy}
-                        onChange={(e) => showClusterKind('nebulae', e.target.checked)}
-                    />
-                    <span className="universe-3d-swatch" style={{ background: '#ffa676' }} />
-                    Nebulae in 3D (measured)
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
-                    title="The small galaxies orbiting the Milky Way, at their measured distances (Local Volume Database, Pace 2025), the brightest labelled. Real, not part of the drawing"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showClusters.dwarf_galaxies}
-                        disabled={!showGalaxy}
-                        onChange={(e) => showClusterKind('dwarf_galaxies', e.target.checked)}
-                    />
-                    <span className="universe-3d-swatch" style={{ background: '#cbbcff' }} />
-                    Dwarf galaxies (measured)
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
-                    title="The band across the sky: the model's starlight added up along each line of sight and dimmed by its dust, from wherever you are. Rendered, not a photo"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showBand}
-                        disabled={!showGalaxy}
-                        onChange={(e) => setShowBand(e.target.checked)}
-                    />
-                    Band on the sky
-                </label>
-                <label
-                    className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
-                    title="Real dust within ~15,000 ly of the Sun, mapped in 3D from the reddening of millions of stars (Edenhofer et al. 2024, Vergely et al. 2022): the dark clouds in the band, and over the model from far out. Off: the model's dust everywhere"
-                >
-                    <input
-                        type="checkbox"
-                        checked={showDust}
-                        disabled={!showGalaxy}
-                        onChange={(e) => setShowDust(e.target.checked)}
-                    />
-                    Dust near the Sun (measured)
-                </label>
-                <label className="universe-3d-checkbox" title="Bloom on everything bright: every star brighter than about mag 5 glows">
-                    <input
-                        type="checkbox"
-                        checked={showHaze}
-                        onChange={(e) => setShowHaze(e.target.checked)}
-                    />
-                    Haze
-                </label>
-                <label className="universe-3d-checkbox" title="Only stars brighter than about mag 1 glow, each by how much light it gives">
-                    <input
-                        type="checkbox"
-                        checked={glowFollowsBrightness}
-                        onChange={(e) => setGlowFollowsBrightness(e.target.checked)}
-                    />
-                    Glow follows brightness
-                </label>
-                {glowFollowsBrightness && (
-                    <div className="universe-3d-glare-tuning universe-3d-sub-option">
-                        <label>
-                            <span>From mag {glareMag.toFixed(1)}</span>
-                            <input
-                                type="range"
-                                min="-1.5"
-                                max="5"
-                                step="0.1"
-                                value={glareMag}
-                                onChange={(e) => setGlareMag(Number(e.target.value))}
-                            />
-                        </label>
-                        <label>
-                            <span>Strength ×{glareStrength.toFixed(2)}</span>
-                            <input
-                                type="range"
-                                min="-2"
-                                max="4"
-                                step="0.1"
-                                value={Math.log2(glareStrength)}
-                                onChange={(e) => setGlareStrength(2 ** Number(e.target.value))}
-                            />
-                        </label>
-                    </div>
-                )}
+                        <input
+                            type="checkbox"
+                            checked={showClusters.globulars}
+                            disabled={!showGalaxy}
+                            onChange={(e) => showClusterKind('globulars', e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: '#ffe2ad' }} />
+                        Globular clusters (measured)
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                        title="4,000 open clusters found in Gaia DR3 (Hunt & Reffert 2023), at their measured distances, coloured by age: blue young, orange old. Real, not part of the drawing"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showClusters.open_clusters}
+                            disabled={!showGalaxy}
+                            onChange={(e) => showClusterKind('open_clusters', e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: 'linear-gradient(90deg, #9fc4ff, #ffe0a0, #ff9e60)' }} />
+                        Open clusters (measured)
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                        title="Nebulae whose 3D shape has been measured, each drawn from its published model at its measured distance. Real, not part of the drawing"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showClusters.nebulae}
+                            disabled={!showGalaxy}
+                            onChange={(e) => showClusterKind('nebulae', e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: '#ffa676' }} />
+                        Nebulae in 3D (measured)
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                        title="The small galaxies orbiting the Milky Way, at their measured distances (Local Volume Database, Pace 2025), the brightest labelled. Real, not part of the drawing"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showClusters.dwarf_galaxies}
+                            disabled={!showGalaxy}
+                            onChange={(e) => showClusterKind('dwarf_galaxies', e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: '#cbbcff' }} />
+                        Dwarf galaxies (measured)
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                        title="The band across the sky: the model's starlight added up along each line of sight and dimmed by its dust, from wherever you are. Rendered, not a photo"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showBand}
+                            disabled={!showGalaxy}
+                            onChange={(e) => setShowBand(e.target.checked)}
+                        />
+                        Band on the sky
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox universe-3d-sub-option ${showGalaxy ? '' : 'disabled'}`}
+                        title="Real dust within ~15,000 ly of the Sun, mapped in 3D from the reddening of millions of stars (Edenhofer et al. 2024, Vergely et al. 2022): the dark clouds in the band, and over the model from far out. Off: the model's dust everywhere"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showDust}
+                            disabled={!showGalaxy}
+                            onChange={(e) => setShowDust(e.target.checked)}
+                        />
+                        Dust near the Sun (measured)
+                    </label>
+                </Universe3DSection>
                 <button className="button-secondary" onClick={() => resetView()}>Reset view</button>
             </div>
 

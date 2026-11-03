@@ -59,6 +59,11 @@ function PlanetInfoCard({ body, distances, time, onClose, onFlyTo }) {
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             <h3 className="star-info-title">{body.name}</h3>
             <div className="star-info-subtitle">{subtitle}</div>
+            <div className="star-info-actions">
+                <button className="button-primary star-info-fly" onClick={onFlyTo}>
+                    {isSun ? 'View the Solar System' : `Fly to ${body.name}`}
+                </button>
+            </div>
 
             <dl className="star-info-facts">
                 {!isSun && body.id !== 'Earth' && f.parent !== 'Earth' && (
@@ -182,10 +187,6 @@ function PlanetInfoCard({ body, distances, time, onClose, onFlyTo }) {
             {f.position && (
                 <p className="star-info-muted star-info-origin">{positionText(f.position)}</p>
             )}
-
-            <button className="button-primary star-info-fly" onClick={onFlyTo}>
-                {isSun ? 'View the Solar System' : `Fly to ${body.name}`}
-            </button>
         </div>
     );
 }
