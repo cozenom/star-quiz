@@ -13,7 +13,7 @@ const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
 
 // What each colour in the model stands for
 export const GALAXY_KEY = [
-    { band: true, name: 'Band on the sky', about: 'The Milky Way as seen from inside the disc: this model\'s starlight added up along each line of sight and dimmed by the dust in front (the measured dust near the Sun, the model\'s further out), worked out from wherever you are (not a photo). The band turns into the disc as you fly out.' },
+    { band: true, name: 'Glow across the sky', about: 'The Milky Way as seen from inside the disc: this model\'s starlight added up along each line of sight and dimmed by the dust in front (the measured dust near the Sun, the model\'s further out), worked out from wherever you are (not a photo). The band turns into the disc as you fly out.' },
     { color: hex(GALAXY_COLORS.thin[0]), name: 'Old disc stars', about: 'Most of the disc\'s stars: long-lived, cooler and yellower than the Sun on average, spread smoothly round the whole disc.' },
     { color: hex(GALAXY_COLORS.bulge[0]), name: 'Bar and bulge', about: 'The oldest stars, with hardly any new ones forming, so the most orange.' },
     { color: hex(GALAXY_COLORS.arms[0]), name: 'Young stars', about: 'Massive stars are hot and blue-white, and burn out within a few million years, before drifting far from the arm they formed in. That is why the arms stand out.' },
@@ -45,13 +45,13 @@ export function KeySwatch({ k }) {
 // (onOpen) has the explanations. Masers' entries only while they're shown.
 const LEGEND = [
     ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.halo && !k.globular && !k.open && !k.nebula && !k.dwarf),
-    { ...GALAXY_KEY.find(k => k.ring), name: 'Masers (measured)', maser: true },
+    { ...GALAXY_KEY.find(k => k.ring), name: 'Masers along the arms', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
-    { ...GALAXY_KEY.find(k => k.halo), name: 'Halo stars: RR Lyrae (measured)' },
-    { ...GALAXY_KEY.find(k => k.globular), name: 'Globular clusters (measured)' },
-    { ...GALAXY_KEY.find(k => k.open), name: 'Open clusters, young → old (measured)' },
-    { ...GALAXY_KEY.find(k => k.nebula), name: 'Nebulae in 3D (measured)' },
-    { ...GALAXY_KEY.find(k => k.dwarf), name: 'Dwarf galaxies (measured)' },
+    { ...GALAXY_KEY.find(k => k.halo), name: 'Halo stars (RR Lyrae)' },
+    { ...GALAXY_KEY.find(k => k.globular), name: 'Globular clusters' },
+    { ...GALAXY_KEY.find(k => k.open), name: 'Open clusters, young → old' },
+    { ...GALAXY_KEY.find(k => k.nebula), name: 'Nebulae (Crab, Carina)' },
+    { ...GALAXY_KEY.find(k => k.dwarf), name: 'Dwarf galaxies' },
 ];
 // showModel: the model is on screen; showMasers: its masers are (they
 // fade in before the model does); showRanges: their distance ranges are
