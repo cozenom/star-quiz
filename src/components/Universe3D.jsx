@@ -44,6 +44,7 @@ import StarInfoCard from './StarInfoCard';
 import Universe3DSearch from './Universe3DSearch';
 import Universe3DSection from './Universe3DSection';
 import Universe3DTimeBar, { nextPresetRate, TIME_RANGE } from './Universe3DTimeBar';
+import Universe3DZoomLadder from './Universe3DZoomLadder';
 import './Universe3D.css';
 
 const SUN_ABS_MAG = 4.83;
@@ -129,6 +130,30 @@ const RING_VIEW_MIN_KM = 2000;
 // Sun (AU), above the ecliptic on Earth's side
 const REGION_VIEW_AU = {
     main: 9, hilda: 12, trojan: 16, neo: 4, centaur: 70, tno: 140, comet: 14, other: 10, oort: 400000,
+};
+
+// The zoom ladder's steps (Universe3DZoomLadder), nearest first. ly: the
+// camera's distance from what it looks at as its flight lands (the star
+// levels' from the Sun, see goToLevel); the marker goes by it
+// (zoomLadderPosition). short: the name on phones. The step lit is the
+// one flown to, until the zoom changes or something else is flown to
+// (see s.step). needs 'planets': left out without them.
+const ZOOM_LEVELS = [
+    { id: 'earth', label: 'Earth', short: 'Earth', ly: 6 * EARTH_RADIUS_LY, needs: 'planets', title: 'Back to Earth (R)' },
+    { id: 'solar', label: 'Solar system', short: 'Planets', ly: 60 / AU_PER_LY, needs: 'planets', title: 'The planets out to Neptune, from 60 AU above the Sun' },
+    { id: 'nearby', label: 'Nearest stars', short: 'Nearby', ly: 25, title: 'The stars within ~25 ly (Alpha Centauri, Sirius, Barnard\'s Star), the Sun and its Oort cloud in the middle' },
+    { id: 'stars', label: 'Constellations', short: 'Stars', ly: 2000, title: 'Out among the stars that make up the constellations, 2,000 ly from the Sun' },
+    { id: 'galaxy', label: 'Milky Way', short: 'Galaxy', ly: 140000, title: 'The whole galaxy' },  // (galaxy3d's milky_way view)
+];
+// Where a camera distance (ly) falls along the steps: 0 at the first, 1
+// at the second..., in log between them, held at the ends
+const zoomLadderPosition = (levels, ly) => {
+    const x = Math.log(ly);
+    for (let i = 0; i < levels.length; i++) {
+        const at = Math.log(levels[i].ly);
+        if (x <= at) return i === 0 ? 0 : i - 1 + (x - Math.log(levels[i - 1].ly)) / (at - Math.log(levels[i - 1].ly));
+    }
+    return levels.length - 1;
 };
 
 // "Show lines" options, one per kind of line (lineKinds keys). needs: what
@@ -476,6 +501,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [showBand, setShowBand] = useState(true);
     // The model is on screen (its legend shows then); set by the render loop
     const [galaxyShown, setGalaxyShown] = useState(false);
+    // The zoom ladder's steps here, and the one lit (s.step, copied by the
+    // render loop): Earth to start, where the view starts
+    const zoomLevels = ZOOM_LEVELS.filter(level => planetFacts || level.needs !== 'planets');
+    const [zoomLevel, setZoomLevel] = useState(planetFacts ? 'earth' : null);
     // Likewise the asteroid and comet cloud
     const [cloudShown, setCloudShown] = useState(false);
     // Its card ('milky_way', 'centre' or an arm name) and the cards' content
@@ -589,6 +618,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const distanceRef = useRef(null);
     const scaleBarRef = useRef(null);
     const scaleLabelRef = useRef(null);
+    const ladderMarkerRef = useRef(null);
     const sceneRef = useRef(null);  // three.js objects + helpers, set up once
     // Simulated time, advanced by the render loop: {time (ms), rate (simulated
     // seconds per real second; 0 stops, negative runs backwards), playing}.
@@ -1045,6 +1075,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             const toPos = new THREE.Vector3(...toPosition);
             const toTgt = new THREE.Vector3(...toTarget);
             controls.minDistance = Math.min(controls.minDistance, minDistance);
+            s.step = s.nextStep;
+            s.nextStep = null;
+            s.stepDistance = null;
             s.flight = {
                 fromTarget: controls.target.clone(),
                 toTarget: toTgt,
@@ -1055,8 +1088,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 start: performance.now(),
             };
         };
-        // Any drag/zoom by the user cancels a flight in progress
-        controls.addEventListener('start', () => { s.flight = null; });
+        // Any drag/zoom by the user cancels a flight in progress (and a
+        // ladder step's flight doesn't get there)
+        controls.addEventListener('start', () => {
+            if (s.flight) s.step = null;
+            s.flight = null;
+        });
+        // The zoom ladder's lit step: set by the flight that goes there
+        // (nextStep, which goToLevel sets before flying), cleared by any
+        // other flight, and as soon as the zoom changes once it's there.
+        // stepDistance: the camera's distance from the target as it landed.
+        s.step = planetFacts ? 'earth' : null;
+        s.nextStep = null;
+        s.stepDistance = null;
 
         // Move from a to b by swinging around a pivot: direction slerped,
         // distance interpolated in log space, so a flight covering many
@@ -1750,8 +1794,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
 
         // ---------- Scale bar ----------
         // Measured at the orbit point (screen centre): things nearer or
-        // farther are drawn bigger or smaller.
+        // farther are drawn bigger or smaller. The zoom ladder's marker
+        // goes by the same distance.
         let lastScale = '';
+        let lastMarker = '';
         const updateScaleBar = () => {
             const bar = scaleBarRef.current;
             const label = scaleLabelRef.current;
@@ -1760,6 +1806,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             if (!height) return;
             const maxPx = Math.min(120, width * 0.25);
             const dist = camera.position.distanceTo(controls.target);
+            const marker = ladderMarkerRef.current;
+            const markerAt = `${((zoomLadderPosition(zoomLevels, dist) + 0.5) / zoomLevels.length * 100).toFixed(2)}%`;
+            if (marker && markerAt !== lastMarker) {
+                lastMarker = markerAt;
+                marker.style.left = markerAt;
+            }
             const lyPerPx = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / height;
             const { lengthLy, label: text } = scaleBarDistance(maxPx * lyPerPx);
             const px = lengthLy / lyPerPx;
@@ -1842,6 +1894,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let frameId;
         let lastDistanceLabel = '';
         let galaxyWasShown = false;
+        let stepWas = s.step;
         let cloudWasShown = false;
         let masersWereShown = false;
         let clustersWereShown = noClusters;
@@ -1910,6 +1963,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             if (LANDMARK_KINDS.some(k => clustersNow[k] !== clustersWereShown[k])) {
                 clustersWereShown = clustersNow;
                 setClustersShown(clustersNow);
+            }
+            if (s.step && !s.flight) {
+                const d = camera.position.distanceTo(controls.target);
+                if (s.stepDistance === null) s.stepDistance = d;
+                else if (Math.abs(Math.log(d / s.stepDistance)) > 1e-3) s.step = null;
+            }
+            if (s.step !== stepWas) {
+                stepWas = s.step;
+                setZoomLevel(s.step);
             }
             // Legends follow what they explain (React state only on a change)
             const shown = galaxy.fade() > 0.3;
@@ -2027,6 +2089,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const home = s.bodyPose('Earth');
         if (home) {
             s.setFollow('Earth');
+            s.nextStep = 'earth';
             s.flyTo(home.position, home.target, home.minDistance);
             setFocus({ type: 'body', id: 'Earth' });
         } else if (selectedAbbrev) {
@@ -2099,13 +2162,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     };
 
     // Stars, planets and moons: fly straight in, as their cards' buttons do
-    // Fly to the galaxy, its centre or an arm, and open its card
-    const viewGalaxy = (id) => {
+    // Fly to the galaxy, its centre or an arm
+    const flyToGalaxy = (id) => {
         const s = sceneRef.current;
         if (!s) return;
         setShowGalaxy(true);
-        selectStar(null);
-        setSelectedGalaxy(id);
         setFocus({ type: 'galaxy', id });
         loadGalaxyData().then((data) => {
             const pose = galaxyPose(data, id);
@@ -2113,6 +2174,28 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             s.setFollow(null);
             s.flyTo(pose.position, pose.target, pose.minDistance);
         }).catch(error => console.error('Error loading the galaxy model:', error));
+    };
+    // ... and open its card
+    const viewGalaxy = (id) => {
+        selectStar(null);
+        setSelectedGalaxy(id);
+        flyToGalaxy(id);
+    };
+    // A zoom ladder step (ZOOM_LEVELS). The star levels look at the Sun
+    // from above the ecliptic on Earth's side, as the region views do.
+    const goToLevel = (id) => {
+        const s = sceneRef.current;
+        if (!s) return;
+        s.nextStep = id;  // (the galaxy's flight waits for its data)
+        if (id === 'earth') resetView();
+        else if (id === 'solar') flyToBody('Sun');
+        else if (id === 'galaxy') flyToGalaxy('milky_way');
+        else {
+            const pose = s.regionPose(ZOOM_LEVELS.find(level => level.id === id).ly * AU_PER_LY);
+            s.setFollow(null);
+            s.flyTo(pose.position, pose.target, pose.minDistance);
+            setFocus(planetFacts ? { type: 'body', id: 'Sun' } : { type: 'none' });
+        }
     };
     // Open a galaxy card without moving (its data may still be on its way)
     const openGalaxyCard = (id) => {
@@ -2888,13 +2971,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 />
             )}
 
-            <div
-                className="universe-3d-scale"
-                title="Scale at the orbit point (screen centre)"
-            >
-                <div ref={scaleLabelRef} className="universe-3d-scale-label" />
-                <div ref={scaleBarRef} className="universe-3d-scale-bar" />
-            </div>
+            <Universe3DZoomLadder
+                levels={zoomLevels}
+                current={zoomLevel}
+                onSelect={goToLevel}
+                scaleLabelRef={scaleLabelRef}
+                scaleBarRef={scaleBarRef}
+                markerRef={ladderMarkerRef}
+            />
 
             <div className="universe-3d-footer">
                 {title && <div className="universe-3d-title">{title}</div>}

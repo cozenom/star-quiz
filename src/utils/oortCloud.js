@@ -22,6 +22,10 @@ const INNER_FLATTENING = 0.3;
 // the planets, out again once it's a speck
 const FADE_IN_LY = [0.02, 0.1];
 const FADE_OUT_LY = [20, 60];
+// Beyond this (ly; about the Oort cloud region view) its points crowd
+// together on screen: dimmed by the square of the distance as they do, it
+// keeps its surface brightness instead of piling into a white ball
+const CROWD_FROM_LY = 6;
 const COLOR = 0x9fb4d8;
 const SIZE_PX = 1.6;
 const ALPHA = 0.35;
@@ -110,7 +114,7 @@ export function buildOortCloud(scene, pixelRatio) {
     return {
         update: (ly) => {
             fade = THREE.MathUtils.smoothstep(ly, ...FADE_IN_LY) * (1 - THREE.MathUtils.smoothstep(ly, ...FADE_OUT_LY));
-            material.uniforms.uAlpha.value = ALPHA * fade;
+            material.uniforms.uAlpha.value = ALPHA * fade * Math.min(1, (CROWD_FROM_LY / ly) ** 2);
             points.visible = wanted && fade > 0;
         },
         // How visible it is now (0..1), for its label
