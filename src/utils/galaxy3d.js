@@ -77,6 +77,14 @@ const MASER_FADE_IN_LY = [1000, 3000];  // (built at BUILD_LY)
 // Flying to one: this far from it, or this share of its distance if more
 const MASER_VIEW_MIN_LY = 4000;
 const MASER_VIEW_SHARE = 0.4;
+// The axis: a line through the centre square to the disc, out to this
+// height above and below it (kpc, ours). The half on the camera's side
+// of the disc is drawn at AXIS_OPACITY and its end labelled; the half
+// behind the disc fainter (it's drawn over it).
+const AXIS_KPC = 15;
+const AXIS_COLOR = 0xc4b5fd;
+const AXIS_OPACITY = 0.5;
+const AXIS_FAR_OPACITY = 0.15;
 
 const starVertexShader = `
     attribute vec3 color;
@@ -488,7 +496,10 @@ function buildMasers(m, pixelRatio) {
 
 // load: () => Promise of galaxy.json (fetched on first need).
 // Returns update(cameraPosition ly),
-// fade(), labels() [{id, name, position (ly)}], setVisible(on),
+// fade(), labels() [{id, name, position (ly)}], axisLabels() (the same,
+// for the axis's north and south ends, with side: 1 north, -1 south),
+// axisSide() (the camera's side of the disc: 1 north, -1 south),
+// setVisible(on), setAxisVisible(on),
 // setMasersVisible(on), setMaserRangesVisible(on) (their distance ranges),
 // highlightMasers(cardId or null),
 // pickMaser(camera, width, height, x, y, radiusPx) -> index | null,
@@ -513,8 +524,17 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
         depthWrite: false,
         blending: THREE.AdditiveBlending,
     });
+    const axisMaterials = [1, -1].map(() => new THREE.LineBasicMaterial({
+        color: AXIS_COLOR, transparent: true, opacity: 0, depthWrite: false, depthTest: false,
+    }));
     const geometries = [];
     let labels = [];
+    let axis = null;  // its north and south halves
+    let axisWanted = true;
+    let axisLabels = [];
+    let axisSide = 1;
+    const centreLy = new THREE.Vector3();
+    const poleLy = new THREE.Vector3();
     let state = 'idle';  // idle -> loading -> ready | failed
     let wanted = true;
     let fade = 0;
@@ -544,6 +564,25 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             if (arm.label < 0 || !ARM_LABELS[arm.name]) continue;
             labels.push({ id: arm.name, name: ARM_LABELS[arm.name], position: toLy(arm.xy_kpc[2 * arm.label], arm.xy_kpc[2 * arm.label + 1], 0) });
         }
+
+        axis = [1, -1].map((side, i) => {
+            const ag = new THREE.BufferGeometry();
+            ag.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, side * AXIS_KPC], 3));
+            const half = new THREE.LineSegments(ag, axisMaterials[i]);
+            half.renderOrder = -1;  // (over the dust, as the masers)
+            half.frustumCulled = false;
+            half.visible = axisWanted;
+            group.add(half);
+            geometries.push(ag);
+            return half;
+        });
+        axisLabels = [
+            { id: 'north', name: 'Galactic north', side: 1, position: toLy(0, 0, AXIS_KPC) },
+            { id: 'south', name: 'Galactic south', side: -1, position: toLy(0, 0, -AXIS_KPC) },
+        ];
+        centreLy.copy(toLy(0, 0, 0));
+        poleLy.copy(toLy(0, 0, 1)).sub(centreLy);
+
         if (data.masers) {
             masers = buildMasers(data.masers, pixelRatio);
             maserGroup.add(...masers.objects);
@@ -568,6 +607,11 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             fade = state === 'ready' ? smoothstep(ly, ...FADE_IN_LY) : 0;
             group.visible = wanted && fade > 0;
             starMaterial.uniforms.uFade.value = fade;
+            if (state === 'ready') {
+                axisSide = poleLy.dot(cameraPosition) >= poleLy.dot(centreLy) ? 1 : -1;
+                axisMaterials[0].opacity = fade * (axisSide === 1 ? AXIS_OPACITY : AXIS_FAR_OPACITY);
+                axisMaterials[1].opacity = fade * (axisSide === -1 ? AXIS_OPACITY : AXIS_FAR_OPACITY);
+            }
             maserFade = state === 'ready' ? smoothstep(ly, ...MASER_FADE_IN_LY) : 0;
             maserGroup.visible = masersShown();
             masers?.setFade(maserFade);
@@ -575,7 +619,13 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
         // How visible it is now (0..1), for its labels
         fade: () => (wanted ? fade : 0),
         labels: () => labels,
+        axisLabels: () => axisLabels,
+        axisSide: () => axisSide,
         setVisible: (on) => { wanted = on; },
+        setAxisVisible: (on) => {
+            axisWanted = on;
+            axis?.forEach(half => { half.visible = on; });
+        },
         setMasersVisible: (on) => { masersWanted = on; },
         setMaserRangesVisible: (on) => {
             rangesWanted = on;
@@ -595,6 +645,7 @@ export function buildGalaxy(scene, pixelRatio, load, { lite = false } = {}) {
             scene.remove(group, maserGroup);
             geometries.forEach(g => g.dispose());
             starMaterial.dispose();
+            axisMaterials.forEach(m => m.dispose());
             masers?.geometries.forEach(g => g.dispose());
             masers?.materials.forEach(m => m.dispose());
         },

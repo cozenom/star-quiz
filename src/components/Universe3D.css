@@ -580,6 +580,27 @@ body:has(.universe-3d-screen) .stars-toggle {
     translate: -50% -50%;
 }
 
+/* Galactic north and south (the poles on the sky, the galaxy axis's
+   ends): a ring on the point, the name to its right */
+.universe-3d-label-pole {
+    padding-left: 14px;
+    translate: -5px -50%;
+    color: rgba(196, 181, 253, 0.85);
+}
+
+.universe-3d-label-pole::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 10px;
+    height: 10px;
+    margin-top: -5px;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+
 /* A label you click for its card (the Oort cloud's) */
 .universe-3d-label-link {
     pointer-events: auto;

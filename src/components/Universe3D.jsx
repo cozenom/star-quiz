@@ -30,6 +30,7 @@ import {
     constellationLinePositions,
     formatBayer,
     normalizeSearchText,
+    raDecToXYZ,
     scaleBarDistance,
     starRecord,
 } from '../utils/universe3d';
@@ -169,6 +170,15 @@ const LINE_OPTIONS = [
         title: 'Pluto and the other dwarf planets, a selected asteroid or comet, and every comet when viewing the Comets region',
     },
     { kind: 'maserRanges', label: 'Maser distance ranges', needs: 'masers', title: 'The faint line through each measured maser: its distance\'s uncertainty' },
+    { kind: 'galacticAxis', label: 'Galactic axis', needs: 'galaxy', title: 'A line through the galaxy\'s centre, square to its disc, out to galactic north and south' },
+];
+
+// The galactic poles on the sky (J2000, as Hipparcos defines them), in
+// Coma Berenices and Sculptor: labelled while the galaxy model isn't
+// shown (from inside it; outside, its axis's ends are)
+const GALACTIC_POLES = [
+    { name: 'North Galactic Pole', ra: 192.85948, dec: 27.12825 },
+    { name: 'South Galactic Pole', ra: 12.85948, dec: -27.12825 },
 ];
 
 // Points shader: each star stores its absolute magnitude, and the apparent
@@ -440,6 +450,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         moonOrbits: true,
         smallBodyOrbits: true,
         maserRanges: true,
+        galacticAxis: true,
     });
     const linesOn = (kind) => showLines && lineKinds[kind];
     const [showLabels, setShowLabels] = useState(true);
@@ -1525,6 +1536,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         };
         makeClickable(oortLabel.el, () => { pressedRegion = 'oort'; });
         let galaxyLabels = [];
+        // Galactic north and south: on the sky (directions) from inside the
+        // galaxy, and the ends of its axis (made once it is built) outside
+        const skyPoleLabels = GALACTIC_POLES.map(p => ({
+            dir: new THREE.Vector3(...raDecToXYZ(p.ra / 15, p.dec, 1)),
+            el: makeLabelEl(p.name, 'universe-3d-label universe-3d-label-pole'),
+            shown: false,
+        }));
+        let axisLabels = [];
         const clusterLabels = {};  // kind -> labels, made once that kind is in
         // Body and ring label sizes (px) for the overlap tests, measured
         // together once the view is laid out
@@ -1558,6 +1577,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 label.shown = show;
             }
             if (show) label.el.style.transform = `translate(${screenPos[0] + dx}px, ${screenPos[1] + dy}px)`;
+        };
+        // A direction (unit vector) as toScreen: where it is on the sky
+        // from the camera, wherever that is
+        const skyDirection = new THREE.Vector3();
+        const directionToScreen = (dir, width, height) => {
+            skyDirection.copy(dir).transformDirection(starCamera.matrixWorldInverse);
+            if (skyDirection.z >= 0) return null;  // behind
+            skyDirection.applyMatrix4(starCamera.projectionMatrix);
+            if (Math.abs(skyDirection.x) > 1.05 || Math.abs(skyDirection.y) > 1.05) return null;
+            return [(skyDirection.x + 1) / 2 * width, (1 - skyDirection.y) / 2 * height];
         };
         const starPosition = new THREE.Vector3();
 
@@ -1679,6 +1708,32 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     label.el.classList.toggle('selected', selected);
                     label.selected = selected;
                 }
+            }
+            // Galactic north or south: the end of the axis on the camera's
+            // side of the disc (the other is behind it). Their ring sits on
+            // the point, the name to its right.
+            if (!axisLabels.length) {
+                axisLabels = galaxy.axisLabels().map(l => ({
+                    side: l.side,
+                    position: l.position,
+                    el: makeLabelEl(l.name, 'universe-3d-label universe-3d-label-pole'),
+                    shown: false,
+                    w: 0,
+                    h: 0,
+                }));
+            }
+            const axisOn = galaxyLabelsOn && opts.showLines && opts.lineKinds.galacticAxis;
+            for (const label of axisLabels) {
+                const p = axisOn && label.side === galaxy.axisSide() ? toScreen(label.position, width, height) : null;
+                if (p) {
+                    measure(label);
+                    skyBoxes.push({ x: p[0] - 5, y: p[1] - label.h / 2, w: label.w, h: label.h });
+                }
+                setLabel(label, p, 0, 0);
+            }
+            const skyPolesOn = opts.showLabels && galaxy.fade() <= 0.3;
+            for (const label of skyPoleLabels) {
+                setLabel(label, skyPolesOn ? directionToScreen(label.dir, width, height) : null, 0, 0);
             }
             // The named star clusters (Messier, or a common name): the
             // selected one first, then the nearest to the camera
@@ -1924,6 +1979,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             galaxy.setVisible(optionsRef.current.showGalaxy);
             galaxy.setMasersVisible(optionsRef.current.showMasers);
             galaxy.setMaserRangesVisible(optionsRef.current.showLines && optionsRef.current.lineKinds.maserRanges);
+            galaxy.setAxisVisible(optionsRef.current.showLines && optionsRef.current.lineKinds.galacticAxis);
             // An open galaxy card's masers stand out (a maser's: its arm's)
             const openMaser = optionsRef.current.selectedMaser !== null ? galaxy.maser(optionsRef.current.selectedMaser) : null;
             galaxy.highlightMasers(openMaser ? openMaser.card
@@ -2581,7 +2637,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     {LINE_OPTIONS.filter(o => planetFacts || o.needs !== 'planets').map(o => {
                         const off = !showLines
                             || (o.needs === 'planets' && !showPlanets)
-                            || (o.needs === 'masers' && !(showGalaxy && showMasers));
+                            || (o.needs === 'masers' && !(showGalaxy && showMasers))
+                            || (o.needs === 'galaxy' && !showGalaxy);
                         return (
                             <label key={o.kind} className={`universe-3d-checkbox universe-3d-sub-option ${off ? 'disabled' : ''}`} title={o.title}>
                                 <input
