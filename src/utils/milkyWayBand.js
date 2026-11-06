@@ -9,6 +9,14 @@
 //   - bulge (exponential, 10 : 6.3 : 2.6) and long bar
 //   - the arms' young stars: a face-on texture rasterised from Reid's
 //     tracks, thin in z (their sigma_z)
+//   - the nucleus round Sgr A*: the nuclear star cluster (a flattened
+//     Dehnen model) and the nuclear stellar disc (exponential), Sormani et
+//     al. 2022's pair, with the bar and bulge's light per Sun (their mass:
+//     Portail et al. 2017). Too small for the march's steps (~8% of the
+//     distance), so each ray passing within NUCLEUS_REACH_KPC of Sgr A* adds
+//     it from its own integral round that closest approach (nucleusLight),
+//     dimmed by the dust in front of that point. The 3D view's glow
+//     (utils/galacticNucleus) uses the same.
 //   - dust: within 5 kpc of the Sun (and 400 pc of the plane) the measured
 //     3D dust map (utils/dustMap: the Great Rift, the Coalsack, the Orion
 //     and Taurus clouds), sampled in finer steps (DUST_SUB per step); the
@@ -29,7 +37,10 @@
 // its bands' dust colours are taken over (CURVE, DUST_COLOR); fitting the
 // parts' amplitudes and colours too only reached 8.5 with values beyond
 // belief (bulge x50, bar x95), so they stay. What's left is mostly in the
-// plane, where the model is too dim towards the inner Galaxy.
+// plane, where the model is too dim towards the inner Galaxy. The nucleus
+// (2026-11-05) left the score as it was: from the Sun the model's dust to
+// Sgr A* is tau ~7 (the real A_V ~30, most of it in the Central Molecular
+// Zone, not modelled yet), so it is a speck under 0.05 deg.
 //
 // The march runs into a cube map round the camera, re-rendered only when
 // the camera has moved enough to change the view (turning is free), and
@@ -68,6 +79,15 @@ const AMP = { thick: 0.04, bulge: 5, bar: 2.5, arms: 0.4 };
 const DISC_HOLE_KPC = [1.5, 4];
 // Young stars' light hugs the plane more than the old disc's (kpc)
 const ARM_SIGMA_Z_KPC = 0.15;
+// The nucleus: rays passing within this of Sgr A* (kpc) get its light,
+// from this many samples for the cluster and for the disc (see
+// nucleusLight); the cluster's samples crowd in to at least
+// NUCLEUS_MIN_S0_KPC of its centre, the disc's to NUCLEUS_DISC_S0 of its
+// scale height
+export const NUCLEUS_REACH_KPC = 1.0;
+const NUCLEUS_STEPS = { cluster: 24, disc: 16 };
+const NUCLEUS_MIN_S0_KPC = 1e-7;
+const NUCLEUS_DISC_S0 = 0.3;
 // Dust: extinction per kpc at unit density (the disc's, in the plane at the
 // Sun). The real average is ~1 mag/kpc in V (tau ~0.9), but real dust is
 // clumpy and light gets through between the clouds; a smooth layer with
@@ -83,6 +103,8 @@ const DUST_ARM_AMP = 1.0;
 const DUST_COLOR = [0.643, 0.850, 1.056];
 // Colours (raw hex) of each part's light
 const COLORS = { disc: 0xf4efe6, bulge: 0xffd9a0, arms: 0xc8d8ff };
+// The nucleus's light is the bulge's colour (old stars both; the legend's swatch)
+export const NUCLEUS_COLOR = COLORS.bulge;
 // Brightness: light -> display value (0..1), the curve of Gaia's map fitted
 // to this model (band_reference.py --fit --curve-only --gaia-bands --nside
 // 64): y at CURVE_KNOTS points evenly spaced in log10(light) from log_lo
@@ -122,8 +144,44 @@ export const BAND_GLSL = /* glsl */ `
     uniform float uGalaxyRadius;
     uniform float uNear;
     uniform int uSteps;
+    uniform vec4 uNsc;           // nuclear star cluster: a0 (kpc), gamma, q, amplitude
+    uniform vec3 uNsd;           // nuclear stellar disc: scale length, height (kpc), amplitude
+    uniform ivec2 uNucleusSteps; // samples per ray: cluster, disc
 
     float sech2(float x) { float c = cosh(clamp(x, -20.0, 20.0)); return 1.0 / (c * c); }
+
+    // The nucleus's density at p (Galactocentric kpc), in the discs' light
+    // units: the cluster a flattened Dehnen model, the disc exponential
+    float nscDensity(vec3 p) {
+        float a = max(length(vec3(p.xy, p.z / uNsc.z)), 1e-12);
+        return uNsc.w * uNsc.x / (pow(a, uNsc.y) * pow(a + uNsc.x, 4.0 - uNsc.y));
+    }
+    float nsdDensity(vec3 p) {
+        return uNsd.z * exp(-length(p.xy) / uNsd.x - abs(p.z) / uNsd.y);
+    }
+    // One part's light (0: cluster, 1: disc) along origin + t dir, t0..t1:
+    // n samples evenly spaced in asinh(s / s0), s = t from the ray's closest
+    // approach to Sgr A*, s0 its miss distance (at least the part's floor):
+    // dense where the profile is steep, a few per factor of distance beyond
+    float nucleusPart(int part, vec3 origin, vec3 dir, float t0, float t1, int n) {
+        float tc = -dot(origin, dir);
+        vec3 c = origin + dir * tc;
+        float s0 = max(length(c), part == 0 ? ${NUCLEUS_MIN_S0_KPC.toExponential(3)} : ${NUCLEUS_DISC_S0.toFixed(3)} * uNsd.y);
+        float u0 = asinh((t0 - tc) / s0);
+        float du = (asinh((t1 - tc) / s0) - u0) / float(n);
+        float sum = 0.0;
+        for (int i = 0; i < 128; i++) {
+            if (i >= n) break;
+            float u = u0 + (float(i) + 0.5) * du;
+            vec3 p = c + dir * (s0 * sinh(u));
+            sum += (part == 0 ? nscDensity(p) : nsdDensity(p)) * cosh(u);
+        }
+        return sum * s0 * du;
+    }
+    float nucleusLight(vec3 origin, vec3 dir, float t0, float t1, ivec2 steps) {
+        if (t1 <= t0) return 0.0;
+        return nucleusPart(0, origin, dir, t0, t1, steps.x) + nucleusPart(1, origin, dir, t0, t1, steps.y);
+    }
 
     // The model's dust at p (Galactocentric kpc), V-band optical depth per
     // kpc: the Drimmel & Spergel disc (flaring, a hole inside R0 / 2) plus
@@ -156,10 +214,14 @@ export const BAND_GLSL = /* glsl */ `
         vec3 tau = vec3(0.0);
         float ratio = t1 / t0;
         float tPrev = t0;
+        // Where the ray passes Sgr A*, and the dust in front of that point
+        float tc = -dot(origin, dir);
+        vec3 tauNucleus = vec3(0.0);
         for (int i = 1; i <= 160; i++) {
             if (i > uSteps) break;
             float t = t0 * pow(ratio, float(i) / float(uSteps));
             float ds = t - tPrev;
+            float tStart = tPrev;
             vec3 p = origin + dir * (0.5 * (t + tPrev));
             // The step's ends, Galactic pc from the Sun (for the measured dust)
             vec3 ha = uGcToHel * (origin + dir * tPrev) + uGcToHelOffset;
@@ -196,7 +258,13 @@ export const BAND_GLSL = /* glsl */ `
             // Light from this step, dimmed by the dust in front of it and
             // (half) by its own
             light += emit * ds * exp(-tau - 0.5 * dtau);
+            if (tc > tStart && tc <= t) tauNucleus = tau + dtau * ((tc - tStart) / ds);
             tau += dtau;
+        }
+        // The nucleus, from its own samples round the closest approach
+        if (length(origin + dir * tc) < ${NUCLEUS_REACH_KPC.toFixed(3)}) {
+            light += uColBulge * exp(-tauNucleus) * nucleusLight(origin, dir,
+                max(t0, tc - ${NUCLEUS_REACH_KPC.toFixed(3)}), min(t1, tc + ${NUCLEUS_REACH_KPC.toFixed(3)}), uNucleusSteps);
         }
         return light;
     }
@@ -264,13 +332,45 @@ function makeArmsTexture(data) {
 
 const hexColor = (h) => new THREE.Color().setHex(h, THREE.LinearSRGBColorSpace);
 
+// The bar and bulge's light per Sun (light units x kpc^3 per Sun): their
+// light in the model (AMP and shapes) over their stellar mass (galaxy.json
+// nucleus.bar_bulge_mass_msun). The bulge's exp(-ellipsoidal radius)
+// integrates to 8 pi abc; the bar to 1.8 half-lengths (its ends taper over
+// the last fifth) x sqrt(2 pi) half-widths x 2 heights.
+export function lightPerSun(data) {
+    const bar = data.bar;
+    const [a, b, c] = bar.bulge_axis_ratio.map(v => v / bar.bulge_axis_ratio[0] * BULGE_SCALE_KPC);
+    const bulge = AMP.bulge * 8 * Math.PI * a * b * c;
+    const barLight = AMP.bar * 1.8 * bar.half_length_kpc * Math.sqrt(2 * Math.PI) * BAR_WIDTH_KPC
+        * 2 * bar.long_bar_scale_height_pc.thin / 1000;
+    return (bulge + barLight) / data.nucleus.bar_bulge_mass_msun;
+}
+
+// The nucleus's shapes and amplitudes (kpc; light units), with the bar and
+// bulge's light per Sun: {nsc: [a0, gamma, q, amplitude], nsd: [scale
+// length, height, central density]}; zeros without galaxy.json's nucleus
+export function nucleusValues(data) {
+    if (!data.nucleus) return { nsc: [1, 0, 1, 0], nsd: [1, 1, 0] };
+    const k = lightPerSun(data);
+    const c = data.nucleus.cluster, d = data.nucleus.disc;
+    const rd = d.scale_length_pc / 1000, hd = d.scale_height_pc / 1000;
+    return {
+        nsc: [c.a0_pc / 1000, c.gamma, c.q, (3 - c.gamma) * k * c.mass_msun / (4 * Math.PI * c.q)],
+        nsd: [rd, hd, k * d.mass_msun / (4 * Math.PI * rd * rd * hd)],
+    };
+}
+
 // The uniforms BAND_GLSL needs, from galaxy.json. lite: fewer steps.
 export function bandUniforms(data, lite = false) {
     const d = data.disc, bar = data.bar, dd = data.dust_disc;
     const r0 = Math.hypot(data.sun_kpc[0], data.sun_kpc[1]);
     const ang = THREE.MathUtils.degToRad(bar.angle_deg);
     const ratio = bar.bulge_axis_ratio.map(v => v / bar.bulge_axis_ratio[0] * BULGE_SCALE_KPC);
+    const nucleus = nucleusValues(data);
     return {
+        uNsc: { value: new THREE.Vector4(...nucleus.nsc) },
+        uNsd: { value: new THREE.Vector3(...nucleus.nsd) },
+        uNucleusSteps: { value: new THREE.Vector2(NUCLEUS_STEPS.cluster, NUCLEUS_STEPS.disc) },
         uArms: { value: armsTexture(data) },
         uArmsHalf: { value: ARMS_HALF_KPC },
         uR0: { value: r0 },

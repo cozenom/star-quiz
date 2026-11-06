@@ -2,6 +2,7 @@ import React from 'react';
 import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
 import { DWARF_COLOR, DWARF_TRUE_COLOR, LANDMARK_NAMES, GLOBULAR_COLOR, NEBULA_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
 import { GC_CLOUD_COLOR, GC_MAGNETAR_COLOR, gcKindName, gcState, msOf, yearOf } from '../utils/galacticCentre3d';
+import { NUCLEUS_COLOR } from '../utils/milkyWayBand';
 import { AU_PER_LY, KM_PER_AU } from '../utils/universe3d';
 import MapLegend from './MapLegend';
 
@@ -19,6 +20,7 @@ export const GALAXY_KEY = [
     { band: true, name: 'Glow across the sky', about: 'The Milky Way as seen from inside the disc: this model\'s starlight added up along each line of sight and dimmed by the dust in front (the measured dust near the Sun, the model\'s further out), worked out from wherever you are (not a photo). The band turns into the disc as you fly out.' },
     { color: hex(GALAXY_COLORS.thin[0]), name: 'Old disc stars', about: 'Most of the disc\'s stars: long-lived, cooler and yellower than the Sun on average, spread smoothly round the whole disc.' },
     { color: hex(GALAXY_COLORS.bulge[0]), name: 'Bar and bulge', about: 'The oldest stars, with hardly any new ones forming, so the most orange.' },
+    { color: hex(NUCLEUS_COLOR), nucleus: true, name: 'Nucleus', about: 'Round Sgr A*: the nuclear star cluster, about 25 million Suns of mostly old red giants with half its light within 14 ly, inside a flat nuclear disc of about a billion Suns that holds most of the mass from about 100 to 1,000 ly out (Schödel et al. 2014; Sormani et al. 2022). Drawn where its stars are, as points like the rest of the model, at every scale: fly in and finer clouds of them take over, so there is always a field of stars round you. Under them, a faint glow of its light added up along each line of sight. The real thing is far brighter: from among its stars the sky would be about as bright as twilight, so it is toned down here to leave the stars and orbits clear.' },
     { color: hex(GALAXY_COLORS.arms[0]), name: 'Young stars', about: 'Massive stars are hot and blue-white, and burn out within a few million years, before drifting far from the arm they formed in. That is why the arms stand out.' },
     { color: hex(GALAXY_COLORS.clumps[0]), name: 'Star clusters', about: 'Young stars born together in groups (OB associations), still close to one another.' },
     { color: hex(GALAXY_COLORS.hii[0]), name: 'Glowing gas', about: 'Hydrogen lit up by young hot stars glows red-pink (H II regions), like the Orion Nebula.' },
@@ -48,7 +50,8 @@ export function KeySwatch({ k, trueColors = false }) {
 // The on-screen legend, shown while the model is: short names; the card
 // (onOpen) has the explanations. Masers' entries only while they're shown.
 const LEGEND = [
-    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.halo && !k.globular && !k.open && !k.nebula && !k.dwarf),
+    ...GALAXY_KEY.filter(k => !k.ring && !k.band && !k.halo && !k.globular && !k.open && !k.nebula && !k.dwarf && !k.nucleus),
+    { ...GALAXY_KEY.find(k => k.nucleus), name: 'Nucleus (star cluster, nuclear disc)' },
     { ...GALAXY_KEY.find(k => k.ring), name: 'Masers along the arms', maser: true },
     { color: hex(MASER_COLOR), line: true, name: 'Maser distance uncertainty range', maser: true },
     { ...GALAXY_KEY.find(k => k.halo), name: 'Halo stars (RR Lyrae)' },
@@ -324,6 +327,7 @@ export function GalacticCentreLegend({ showOrbits, onOpen }) {
         showOrbits && { key: 'cloud-orbits', swatch: <span className="galaxy-legend-line" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects\' orbits' },
         { key: 'magnetar', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_MAGNETAR_COLOR) }} />, name: 'Magnetar' },
         { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: 'Sgr A*\'s shadow (true size)' },
+        { key: 'cluster', swatch: <span className="universe-3d-swatch" style={{ background: hex(NUCLEUS_COLOR) }} />, name: 'The star cluster round it (toned down)' },
     ].filter(Boolean);
     return <MapLegend title="Galactic Centre" onTitle={onOpen} storageKey="universe3d.legend.gc" items={items} />;
 }

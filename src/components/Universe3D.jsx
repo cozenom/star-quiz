@@ -11,6 +11,7 @@ import { buildSolarSystem, ECLIPTIC_NORTH, minViewRadii } from '../utils/solarSy
 import { buildSmallBodyCloud, COMET_FAMILIES, smallBodyColor } from '../utils/smallBodies3d';
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
+import { buildNucleus } from '../utils/galacticNucleus';
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { createDustMap, dustMapSource } from '../utils/dustMap';
@@ -972,6 +973,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // when galaxy.json arrives)
         let band = null;
         let galaxyDust = null;
+        // The nucleus round Sgr A* (its star cluster and nuclear disc):
+        // points at every scale over a faint glow, after the dust volume
+        // (their own dust in front)
+        let nucleus = null;
         // The landmarks (landmarks.json): star clusters and nebulae, each
         // kind real, shown from closer in than the model; a kind's Gaia stars
         // (several MB), or the nebulae's models, once the camera is near one
@@ -1031,6 +1036,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             dust.setGalaxyFrame(data.to_scene);
             band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite, dust });
             galaxyDust = buildGalaxyDust(scene, data, { lite, dust, background: renderer.getClearColor(new THREE.Color()) });
+            nucleus = buildNucleus(scene, data, { lite, dust, pixelRatio });
             for (const kind of LANDMARK_KINDS) {
                 if (!data.landmarks?.[kind]) continue;
                 clusterData[kind] = data.landmarks[kind];
@@ -2093,6 +2099,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             }
             galaxyDust?.setFade(galaxy.fade() * (1 - (band ? band.fade() : 0)));
             galaxyDust?.update(camera.position);
+            nucleus?.setFade(galaxy.fade());
+            nucleus?.update(camera.position);
             // The star clusters; each kind's stars loaded once near one of
             // them out of the Solar System (or one is opened)
             const clustersNow = {};
@@ -2228,6 +2236,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             disposed = true;
             band?.dispose();
             galaxyDust?.dispose();
+            nucleus?.dispose();
             Object.values(clusters).forEach(c => c.dispose());
             gc?.dispose();
             dust.dispose();
