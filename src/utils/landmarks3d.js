@@ -43,6 +43,9 @@ export const OPEN_AGE_COLORS = [[6.5, 0x9fc4ff], [7.7, 0xe8eeff], [8.7, 0xffe0a0
 export const NEBULA_COLOR = 0xffa676;
 // Dwarf galaxies (raw hex, ours; also the legend's swatch)
 export const DWARF_COLOR = 0xcbbcff;
+// ... in true colour mode: the yellow-white of their old stars (B-V
+// about 0.6-0.7 added up), not the key's lavender
+export const DWARF_TRUE_COLOR = 0xfff1dc;
 // Per kind: marker diameter (px) over the range of its size measure
 // (log10 Suns for globulars, log10 members for open clusters, none for
 // nebulae), brightness
@@ -553,6 +556,7 @@ function nebulaMesh(buffer, model, centre, occluders) {
 // scene: the star layer's scene; kind: a LANDMARK_KINDS key; g:
 // landmarks.json[kind]. Returns {update(cameraLy, viewportHeightPx,
 // fovDeg), fade(), setVisible(on), setStarsOn(on) (their stars are drawn),
+// setTrueColor(on) (dwarf galaxies' markers: DWARF_TRUE_COLOR),
 // addModels(buffers) (nebulae: every part's file, in order),
 // nearest(cameraLy) (ly to the nearest one's centre), labels() [{index,
 // name, position (Vector3)}], info(i), pick(camera, width, height, x, y,
@@ -614,6 +618,7 @@ export function buildClusters(scene, kind, g, pixelRatio) {
     // Nebulae's model parts, once loaded: {index, mesh, centre, radius}
     const models = [];
     let wanted = true;
+    let trueColor = false;
     let fade = 0;
     const projected = new THREE.Vector3();
     return {
@@ -636,6 +641,13 @@ export function buildClusters(scene, kind, g, pixelRatio) {
         fade: () => fade,
         setVisible: (on) => { wanted = on; },
         setStarsOn: (on) => { material.uniforms.uStarsOn.value = on || models.length ? 1 : 0; },
+        setTrueColor: (on) => {
+            if (kind !== 'dwarf_galaxies' || on === trueColor) return;
+            trueColor = on;
+            const c = rgb(on ? DWARF_TRUE_COLOR : DWARF_COLOR);
+            for (let i = 0; i < n; i++) colors.set(c, 3 * i);
+            geometry.getAttribute('color').needsUpdate = true;
+        },
         addModels: (buffers) => {
             let b = 0;
             g.models.forEach((parts, i) => {

@@ -1,6 +1,6 @@
 import React from 'react';
 import { SMALL_BODY_REGIONS } from '../utils/universe3d';
-import { COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '../utils/smallBodies3d';
+import { COMET_FAMILIES, smallBodyColor } from '../utils/smallBodies3d';
 import { currentElements, perihelionDate, smallBodyPeriodDays } from '../utils/smallBodies';
 
 // An asteroid / comet region (search: "Asteroid belt", "Comets"...): what it
@@ -100,8 +100,8 @@ const fmtYears = (days) => {
 // Solar System bodies (named small bodies and Pluto are listed);
 // time: the clock (ms); hiddenParts: Set of 'region:part' switched off;
 // onTogglePart('region:part') switches one: its dots, its named members,
-// and for comets their orbits
-function RegionInfoCard({ regionId, meta, bodies, time, hiddenParts, onTogglePart, onSelectBody, onClose }) {
+// and for comets their orbits; trueColors: true colour mode is on
+function RegionInfoCard({ regionId, meta, bodies, time, hiddenParts, onTogglePart, onSelectBody, onClose, trueColors = false }) {
     const info = REGION_INFO[regionId];
     const counts = meta.regions?.[regionId] ?? {};
     const total = regionId === 'oort' ? null
@@ -146,7 +146,7 @@ function RegionInfoCard({ regionId, meta, bodies, time, hiddenParts, onTogglePar
             )}
 
             {info.parts.map(part => {
-                const swatch = part.color ?? SMALL_BODY_GROUP_COLORS[regionId];
+                const swatch = part.color ?? smallBodyColor(regionId, trueColors);
                 const key = `${regionId}:${part.id}`;
                 const hidden = hiddenParts.has(key);
                 return (

@@ -25,6 +25,25 @@ export const SMALL_BODY_GROUP_COLORS = {
     comet: '#67e8f9',
     other: '#9ca3af',
 };
+// Their real colours, for true colour mode (setTrueColor): sunlit surface
+// tints from each group's usual spectral types. S-types (reddish grey)
+// among the near-Earth ones and the inner belt, C-types (neutral) further
+// out, red-sloped P/D-types among the Hildas and Trojans, red centaurs
+// and Kuiper belt objects, dark comet nuclei. All much alike: the
+// differences are subtle to the eye.
+export const SMALL_BODY_TRUE_COLORS = {
+    main: '#9a948b',
+    hilda: '#958a7f',
+    trojan: '#988777',
+    neo: '#a69986',
+    centaur: '#a39080',
+    tno: '#ad9179',
+    comet: '#8c847c',
+    other: '#9a948b',
+};
+export const smallBodyColor = (groupId, trueColor) => (trueColor ? SMALL_BODY_TRUE_COLORS : SMALL_BODY_GROUP_COLORS)[groupId];
+// Raw hex values, like the planet dots (no colour management)
+const rawColor = (css) => new THREE.Color().setHex(new THREE.Color(css).getHex(), THREE.LinearSRGBColorSpace);
 // Per tier (default, more): point size (CSS px) and opacity. The "more"
 // tier is 1.5 million faint points on top: dimmer, so the belt thickens
 // rather than turning solid
@@ -204,6 +223,8 @@ function orbitParts(groupId) {
 //   setGroupOrbits(groupId, on): draw every orbit of a group (default tier)
 //   setPartVisible(groupId, sub, on): one part of a group (small_bodies.json
 //     subgroup_ids: a belt zone, a comet family...), dots and orbit lines
+//   setTrueColor(on): dots in their real colours (SMALL_BODY_TRUE_COLORS),
+//     or the groups' key colours (orbit lines keep theirs)
 //   pick(camera, width, height, x, y, radiusPx) -> {index, groupId, position} | null
 //     (the default tier's point nearest a screen point; index into its rows
 //     and small_bodies_names.json), dispose()
@@ -218,6 +239,7 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
         uFade: { value: 1 },
     };
     const objects = [];  // {points, tier, groupId}
+    let trueColor = false;
     const hiddenGroups = new Set();
     const hiddenTiers = new Set();
     const orbitsWanted = new Set();   // group ids whose orbit lines are asked for
@@ -371,8 +393,7 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
                     uDim: { value: 1 },
                     uMeanMotion: { value: (RESONANT_RATE[id] ?? 0) * JUPITER_RATE },
                     uPartHidden: partHidden.get(id),
-                    // Raw hex values, like the planet dots (no colour management)
-                    uColor: { value: new THREE.Color().setHex(new THREE.Color(SMALL_BODY_GROUP_COLORS[id]).getHex(), THREE.LinearSRGBColorSpace) },
+                    uColor: { value: rawColor(smallBodyColor(id, trueColor)) },
                 },
                 vertexShader,
                 fragmentShader,
@@ -422,6 +443,11 @@ export function buildSmallBodyCloud(scene, meta, pixelRatio) {
         pick,
         setGroupOrbits,
         setPartVisible,
+        setTrueColor: (on) => {
+            if (on === trueColor) return;
+            trueColor = on;
+            for (const { points, groupId } of objects) points.material.uniforms.uColor.value.copy(rawColor(smallBodyColor(groupId, on)));
+        },
         dispose: () => {
             for (const parts of orbitLines.values()) {
                 for (const { lines } of parts) {

@@ -8,7 +8,7 @@ import { addLayerPasses, createLayer, syncLayerCamera, syncLayerPasses } from '.
 import { createStarDisc, radiusToLy } from '../utils/starDisc';
 import { SPRITE_FRAGMENT_GLSL, SPRITE_MAX_SIZE_PX, SPRITE_VERTEX_GLSL, STAR_MIN_ALPHA } from '../utils/starSprite';
 import { buildSolarSystem, ECLIPTIC_NORTH, minViewRadii } from '../utils/solarSystem3d';
-import { buildSmallBodyCloud, COMET_FAMILIES, SMALL_BODY_GROUP_COLORS } from '../utils/smallBodies3d';
+import { buildSmallBodyCloud, COMET_FAMILIES, smallBodyColor } from '../utils/smallBodies3d';
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
@@ -454,6 +454,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     });
     const linesOn = (kind) => showLines && lineKinds[kind];
     const [showLabels, setShowLabels] = useState(true);
+    // True colours: asteroids, comets, the Oort cloud and dwarf galaxies in
+    // their real colours, not their kinds' key colours
+    const [trueColors, setTrueColors] = useState(false);
     const [showPlanets, setShowPlanets] = useState(true);
     const [showSmallMoons, setShowSmallMoons] = useState(true);
     // Asteroids and comets: the named ones (showSmallBodies), the point
@@ -678,7 +681,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
+    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -1975,6 +1978,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             cloud?.setFade(solarFade);
             cloud?.setCameraDistance(camera.position.length() * AU_PER_LY);
             oort.setVisible(optionsRef.current.showOort);
+            solar?.setTrueColor(optionsRef.current.trueColors);
+            cloud?.setTrueColor(optionsRef.current.trueColors);
+            oort.setTrueColor(optionsRef.current.trueColors);
+            clusters.dwarf_galaxies?.setTrueColor(optionsRef.current.trueColors);
             oort.update(camera.position.length());
             galaxy.setVisible(optionsRef.current.showGalaxy);
             galaxy.setMasersVisible(optionsRef.current.showMasers);
@@ -2553,7 +2560,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         .filter(g => !hiddenGroups.has(g.id))
         .map(g => ({
             key: g.id,
-            swatch: <span className="universe-3d-swatch" style={{ background: SMALL_BODY_GROUP_COLORS[g.id] }} />,
+            swatch: <span className="universe-3d-swatch" style={{ background: smallBodyColor(g.id, trueColors) }} />,
             name: g.name,
             onClick: SMALL_BODY_REGIONS[g.id] ? () => { selectStar(null); setSelectedRegion(g.id); } : undefined,
         })) : [];
@@ -2660,6 +2667,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                             onChange={(e) => setShowLabels(e.target.checked)}
                         />
                         Show names
+                    </label>
+                    <label
+                        className="universe-3d-checkbox"
+                        title="Asteroids, comets, the Oort cloud and dwarf galaxies in their real colours (the greys and browns of their surfaces, old stars' yellow-white), not colours that tell their kinds apart. Orbits, lines and markers keep theirs."
+                    >
+                        <input
+                            type="checkbox"
+                            checked={trueColors}
+                            onChange={(e) => setTrueColors(e.target.checked)}
+                        />
+                        True colours
                     </label>
                 </Universe3DSection>
                 <Universe3DSection id="stars" title="Stars">
@@ -2768,7 +2786,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                                                         return next;
                                                     })}
                                                 />
-                                                <span className="universe-3d-swatch" style={{ background: SMALL_BODY_GROUP_COLORS[g.id] }} />
+                                                <span className="universe-3d-swatch" style={{ background: smallBodyColor(g.id, trueColors) }} />
                                                 {g.name}
                                             </label>
                                         ))}
@@ -2946,6 +2964,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     bodies={solar.bodies}
                     time={clockView.time}
                     hiddenParts={hiddenParts}
+                    trueColors={trueColors}
                     onTogglePart={(key) => setHiddenParts(prev => {
                         const next = new Set(prev);
                         if (next.has(key)) next.delete(key);
@@ -2976,6 +2995,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         showNebulae={clustersShown.nebulae}
                         showDwarfs={clustersShown.dwarf_galaxies}
                         showHalo={showFarStars && showHaloStars && haloCount !== null}
+                        trueColors={trueColors}
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
                 )}
@@ -2988,6 +3008,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     onSelectMaser={selectMaser}
                     onView={() => viewGalaxy(selectedGalaxy)}
                     onClose={() => setSelectedGalaxy(null)}
+                    trueColors={trueColors}
                 />
             )}
             {maser && (

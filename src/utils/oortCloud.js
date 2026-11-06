@@ -27,6 +27,9 @@ const FADE_OUT_LY = [20, 60];
 // keeps its surface brightness instead of piling into a white ball
 const CROWD_FROM_LY = 6;
 const COLOR = 0x9fb4d8;
+// In true colour mode: the grey of icy bodies darkened by sunlight and
+// cosmic rays, like the comets that fall in from it
+const TRUE_COLOR = 0xa9a39b;
 const SIZE_PX = 1.6;
 const ALPHA = 0.35;
 
@@ -90,7 +93,7 @@ const fragmentShader = `
     }
 `;
 
-// Returns update(cameraDistanceLy), setVisible(on), dispose()
+// Returns update(cameraDistanceLy), setVisible(on), setTrueColor(on), dispose()
 export function buildOortCloud(scene, pixelRatio) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions(), 3));
@@ -120,6 +123,7 @@ export function buildOortCloud(scene, pixelRatio) {
         // How visible it is now (0..1), for its label
         fade: () => (wanted ? fade : 0),
         setVisible: (on) => { wanted = on; },
+        setTrueColor: (on) => { material.uniforms.uColor.value.setHex(on ? TRUE_COLOR : COLOR, THREE.LinearSRGBColorSpace); },
         dispose: () => {
             scene.remove(points);
             geometry.dispose();

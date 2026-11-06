@@ -71,6 +71,9 @@ const UNKNOWN_NUCLEUS_RADIUS_KM = 1;
 const ASTEROID_COLOR = '#9a948b';
 const ICY_COLOR = '#c2b5a8';      // dwarf planets and bodies beyond Jupiter
 const COMET_COLOR = '#7fd6ea';
+// A comet's nucleus in true colour mode: dark, neutral to slightly red
+// (the cyan is the key's; only their comae glow blue-green)
+const COMET_NUCLEUS_COLOR = '#8c847c';
 const ICY_TYPES = new Set(['dwarf planet', 'centaur', 'trans-Neptunian object']);
 const DEFAULT_MOON_COLOR = '#aaa49b';
 const MOON_COLORS = {
@@ -645,6 +648,7 @@ function moonFacts(m) {
 //   isShown(body): false for small bodies while they're switched off
 //   update(date), setFade(f), setShowOrbits({planets, moons, smallBodies}), setHighlightOrbit(id),
 //   setShowSmallBodies(on), setCometOrbits(on) (every named comet's),
+//   setTrueColor(on) (comets as their nuclei's colour, not the key's cyan),
 //   updateTextures(cameraAu, heightPx, fovDeg) (call each frame: lazy loading),
 //   updateMinorMoonFade(cameraAu, heightPx, fovDeg), minorMoonFade(planetId),
 //   setShowMinorMoons(on), setRingWaveScale(scale), updateRingView(cameraAu)
@@ -942,6 +946,7 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         smallBodyList.push(body);
     }
     let showSmallBodies = true;
+    let trueColor = false;
     // Region parts switched off ('group:part', see setHiddenParts): their
     // named bodies hide too. One-time visitors (no region) count as
     // 'comet:once'.
@@ -1341,6 +1346,17 @@ export function buildSolarSystem(scene, facts, moonsData, pixelRatio, smallBodie
         setShowSmallBodies: (on) => {
             showSmallBodies = on;
             applySmallBodyVisibility();  // their orbit lines too
+        },
+        // (their orbit lines keep the cyan)
+        setTrueColor: (on) => {
+            if (on === trueColor) return;
+            trueColor = on;
+            const hex = new THREE.Color(on ? COMET_NUCLEUS_COLOR : COMET_COLOR).getHex();
+            for (const body of smallBodyList) {
+                if (!body.isComet) continue;
+                body.dot?.material.uniforms.uColor.value.setHex(hex, THREE.LinearSRGBColorSpace);
+                if (!body.surfaceMap) body.mesh.material.color.setHex(hex);
+            }
         },
         // 1 near the Sun, 0 far out (log scale), from camera distance in AU
         fadeForDistance: (au) => 1 - THREE.MathUtils.smoothstep(

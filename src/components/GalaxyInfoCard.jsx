@@ -1,6 +1,6 @@
 import React from 'react';
 import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
-import { DWARF_COLOR, LANDMARK_NAMES, GLOBULAR_COLOR, NEBULA_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
+import { DWARF_COLOR, DWARF_TRUE_COLOR, LANDMARK_NAMES, GLOBULAR_COLOR, NEBULA_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
 import MapLegend from './MapLegend';
 
 // The Milky Way model's cards: the galaxy as a whole (with the key to the
@@ -11,7 +11,8 @@ import MapLegend from './MapLegend';
 
 const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
 
-// What each colour in the model stands for
+// What each colour in the model stands for (trueColor: its colour in true
+// colour mode, where that differs)
 export const GALAXY_KEY = [
     { band: true, name: 'Glow across the sky', about: 'The Milky Way as seen from inside the disc: this model\'s starlight added up along each line of sight and dimmed by the dust in front (the measured dust near the Sun, the model\'s further out), worked out from wherever you are (not a photo). The band turns into the disc as you fly out.' },
     { color: hex(GALAXY_COLORS.thin[0]), name: 'Old disc stars', about: 'Most of the disc\'s stars: long-lived, cooler and yellower than the Sun on average, spread smoothly round the whole disc.' },
@@ -26,18 +27,19 @@ export const GALAXY_KEY = [
     { color: hex(GLOBULAR_COLOR), globular: true, name: 'Globular clusters', about: 'Real, not drawn to match: 167 globular clusters at their measured distances, balls of hundreds of thousands of stars swarming round the centre in a halo, far above and below the disc. Each glows out to its true size when you get close.' },
     { color: hex(NEBULA_COLOR), nebula: true, name: 'Nebulae', about: 'Real, not drawn to match: the few nebulae whose 3D shape has been measured, each drawn from its published model at its measured distance. A dot from afar; fly close to see its shape: glowing gas, or dust lit by its star.' },
     { gradient: OPEN_AGE_COLORS.map(([, c]) => hex(c)), open: true, name: 'Open clusters', about: 'Real, not drawn to match: 4,000 open clusters found by Gaia, at their measured distances, coloured by age: blue for the young ones (a few million years), white, yellow, then orange for the old (billions). The youngest trace the spiral arms they formed in.' },
-    { color: hex(DWARF_COLOR), dwarf: true, name: 'Dwarf galaxies', about: 'Real, not drawn to match: the small galaxies orbiting the Milky Way, at their measured distances, the brightest labelled. Fly to one to see the members Gaia picked out, the brightest of its stars. The Magellanic Clouds and Sagittarius show only their RR Lyrae stars, each at its own distance, so errors of a few percent stretch them along our line of sight.' },
+    { color: hex(DWARF_COLOR), trueColor: hex(DWARF_TRUE_COLOR), dwarf: true, name: 'Dwarf galaxies', about: 'Real, not drawn to match: the small galaxies orbiting the Milky Way, at their measured distances, the brightest labelled. Fly to one to see the members Gaia picked out, the brightest of its stars. The Magellanic Clouds and Sagittarius show only their RR Lyrae stars, each at its own distance, so errors of a few percent stretch them along our line of sight.' },
 ];
 
 // A key swatch: a dot, a ring for the masers' markers, or a short line
-// for their distance ranges
-export function KeySwatch({ k }) {
-    if (k.line) return <span className="galaxy-legend-line" style={{ background: k.color }} />;
+// for their distance ranges. trueColors: true colour mode is on.
+export function KeySwatch({ k, trueColors = false }) {
+    const color = trueColors && k.trueColor ? k.trueColor : k.color;
+    if (k.line) return <span className="galaxy-legend-line" style={{ background: color }} />;
     if (k.band) return <span className="galaxy-legend-band" />;
     if (k.gradient) return <span className="universe-3d-swatch" style={{ background: `linear-gradient(90deg, ${k.gradient.join(', ')})` }} />;
     const style = k.ring
-        ? { background: 'transparent', border: `2px solid ${k.color}` }
-        : { background: k.color, border: k.name === 'Dust' ? '1px solid #64748b' : undefined };
+        ? { background: 'transparent', border: `2px solid ${color}` }
+        : { background: color, border: k.name === 'Dust' ? '1px solid #64748b' : undefined };
     return <span className="universe-3d-swatch" style={style} />;
 }
 
@@ -56,8 +58,9 @@ const LEGEND = [
 // showModel: the model is on screen; showMasers: its masers are (they
 // fade in before the model does); showRanges: their distance ranges are
 // drawn; showGlobulars / showOpenClusters / showNebulae / showDwarfs: those landmarks
-// are; showHalo: the RR Lyrae are (listed while the model is)
-export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, showOpenClusters = false, showNebulae = false, showDwarfs = false, showHalo = false, onOpen }) {
+// are; showHalo: the RR Lyrae are (listed while the model is);
+// trueColors: true colour mode is on
+export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlobulars = false, showOpenClusters = false, showNebulae = false, showDwarfs = false, showHalo = false, trueColors = false, onOpen }) {
     const shown = (k) => (k.globular ? showGlobulars : k.open ? showOpenClusters : k.nebula ? showNebulae : k.dwarf ? showDwarfs
         : k.halo ? showHalo && showModel
         : k.maser ? showMasers && (!k.line || showRanges) : showModel);
@@ -66,7 +69,7 @@ export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlo
             title="Milky Way (model)"
             onTitle={onOpen}
             storageKey="universe3d.legend.galaxy"
-            items={LEGEND.filter(shown).map(k => ({ key: k.name, swatch: <KeySwatch k={k} />, name: k.name }))}
+            items={LEGEND.filter(shown).map(k => ({ key: k.name, swatch: <KeySwatch k={k} trueColors={trueColors} />, name: k.name }))}
         />
     );
 }
@@ -140,7 +143,7 @@ function Links({ current, cards, onSelect }) {
     );
 }
 
-function MilkyWay({ card, actions }) {
+function MilkyWay({ card, actions, trueColors }) {
     return (
         <>
             <h3 className="star-info-title">Milky Way</h3>
@@ -157,7 +160,7 @@ function MilkyWay({ card, actions }) {
                 <div className="region-part-head static"><strong>What the colours mean</strong></div>
                 {GALAXY_KEY.map(k => (
                     <div key={k.name} className="galaxy-key-row">
-                        <KeySwatch k={k} />
+                        <KeySwatch k={k} trueColors={trueColors} />
                         <div><strong>{k.name}</strong> <span className="star-info-muted">{k.about}</span></div>
                     </div>
                 ))}
@@ -241,8 +244,8 @@ function Arm({ id, card, maserShort, onSelectMaser, actions }) {
 
 // id: 'milky_way', 'centre' or an arm name; cards: galaxy.json cards;
 // onSelect(id) opens another card, onSelectMaser(index) a maser's;
-// onView flies the camera to this one
-function GalaxyInfoCard({ id, cards, onSelect, onSelectMaser, onView, onClose }) {
+// onView flies the camera to this one; trueColors: true colour mode is on
+function GalaxyInfoCard({ id, cards, onSelect, onSelectMaser, onView, onClose, trueColors = false }) {
     const arm = cards.arms[id];
     // (under the title, which each part draws)
     const actions = (
@@ -255,7 +258,7 @@ function GalaxyInfoCard({ id, cards, onSelect, onSelectMaser, onView, onClose })
     return (
         <div className="star-info region-info">
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
-            {id === 'milky_way' && <MilkyWay card={cards.milky_way} actions={actions} />}
+            {id === 'milky_way' && <MilkyWay card={cards.milky_way} actions={actions} trueColors={trueColors} />}
             {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} onSelectMaser={onSelectMaser} actions={actions} />}
             {arm && <Arm id={id} card={arm} maserShort={cards.milky_way.maser_short} onSelectMaser={onSelectMaser} actions={actions} />}
             <Links current={id} cards={cards} onSelect={onSelect} />
