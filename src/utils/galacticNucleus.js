@@ -67,8 +67,11 @@ const BOX_HALF_KPC = [NUCLEUS_REACH_KPC, NUCLEUS_REACH_KPC, 0.4];
 // Samples per ray (cluster, disc) and for the dust in front
 const STEPS = { full: [48, 32], lite: [24, 16] };
 const DUST_STEPS = { full: 48, lite: 24 };
-// The dust march starts this far from the camera (kpc)
+// The dust march starts this far from the camera (kpc), with at most one
+// sample per DUST_SPAN_KPC of the way (the model's dust has a hole round
+// the centre: within the nucleus there's little to sample)
 const DUST_NEAR_KPC = 0.002;
+const DUST_SPAN_KPC = 0.05;
 // Light -> brightness (ours): x = log10(light) from LO to HI, brightness
 // MAX x^GAMMA, eased in over the first SOFT of x, in the light's own colour
 // (the curve on its brightest channel, so it keeps its hue and the dust's
@@ -81,11 +84,14 @@ const DUST_NEAR_KPC = 0.002;
 const DISPLAY = { lo: 0.4, hi: 3.2, max: 0.14, gamma: 0.7, soft: 0.15 };
 
 // tau_V of the dust from p along dir for t kpc (the measured map where it
-// is, the model's for the rest): n samples spaced geometrically from
-// DUST_NEAR_KPC, each at jitter (0..1) within its step. After BAND_GLSL.
+// is, the model's for the rest): up to n samples spaced geometrically from
+// DUST_NEAR_KPC (one per DUST_SPAN_KPC of the way, at least 2: inside the
+// nucleus a few, not n, for every pixel and point), each at jitter (0..1)
+// within its step. After BAND_GLSL.
 const DUST_IN_FRONT_GLSL = /* glsl */ `
-    float dustInFront(vec3 p0, vec3 dir, float t, int n, float jitter) {
+    float dustInFront(vec3 p0, vec3 dir, float t, int nMax, float jitter) {
         if (t <= ${DUST_NEAR_KPC.toFixed(4)}) return 0.0;
+        int n = min(nMax, max(2, int(ceil(t / ${DUST_SPAN_KPC.toFixed(3)}))));
         float ratio = t / ${DUST_NEAR_KPC.toFixed(4)};
         float tauV = 0.0;
         for (int i = 0; i < 128; i++) {

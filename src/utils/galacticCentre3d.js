@@ -36,15 +36,22 @@ const J2000_MS = Date.UTC(2000, 0, 1, 12);
 export const yearOf = (ms) => 2000 + (ms - J2000_MS) / MS_PER_YEAR;
 export const msOf = (year) => J2000_MS + (year - 2000) * MS_PER_YEAR;
 
-// The close-up (orbits, labels, glows, picking) shows once S2's orbit is
-// this many px across, fully by the second
+// The close-up shows once S2's orbit is this many px across, fully by the
+// second (the G objects' glows and the magnetar's marker with it), or the
+// young stars' typical orbit is (their median widest point). Each object's
+// own label, orbit and picking show once its own orbit (its distance from
+// Sgr A* for one without) is OBJECT_PX across: from afar only the big
+// orbits, zoomed in all of them.
 const CLOSE_UP_PX = [12, 40];
+const OBJECT_PX = [30, 80];
 // An orbit line fades in as its widest point grows from / to this (px),
 // and out as it grows past these multiples of the camera's distance from
 // Sgr A* (the camera inside it: it would cut across the whole view)
 const ORBIT_PX = [6, 30];
 const ORBIT_TOO_WIDE = [1.5, 3];
 const ORBIT_OPACITY = 0.45;
+// Young stars whose orbits are drawn unselected: those with a measured depth
+const ORBIT_DEPTHS = new Set(['disc', 'acceleration']);
 const ORBIT_SELECTED_OPACITY = 0.95;
 // Points round an orbit (eccentric anomaly steps): more for the most
 // eccentric, so the bend at closest approach stays smooth
@@ -114,11 +121,13 @@ export function gcState(obj, t, massMsun) {
 }
 
 // One line for hover and search: "S2 · star round Sgr A*, every 16.0 years"
-const KIND_NAMES = { star: 'Star round Sgr A*', cloud: 'Dusty cloud round Sgr A*', magnetar: 'Magnetar near Sgr A*' };
-export const gcKindName = (obj) => KIND_NAMES[obj.kind];
+const KIND_NAMES = { star: 'Star round Sgr A*', young: 'Young massive star round Sgr A*', cloud: 'Dusty cloud round Sgr A*', magnetar: 'Magnetar near Sgr A*' };
+export const gcKindName = (obj) => KIND_NAMES[obj.group === 'young' ? 'young' : obj.kind];
 const years = (p) => (p < 100 ? p.toFixed(1) : Math.round(p).toLocaleString());
 export function gcLabel(obj) {
-    if (!obj.orbit) return `${obj.name} · magnetar, ${Math.hypot(...obj.offset_arcsec).toFixed(1)}″ from Sgr A* on the sky`;
+    const sky = obj.offset_arcsec ? `${Math.hypot(...obj.offset_arcsec).toFixed(1)}″ from Sgr A* on the sky` : '';
+    if (obj.kind === 'magnetar') return `${obj.name} · magnetar, ${sky}`;
+    if (!obj.orbit) return `${obj.name} · ${obj.type}, ${sky}`;
     return `${obj.name} · ${obj.kind === 'cloud' ? 'G object' : obj.type}, round Sgr A* every ${years(obj.orbit.period_yr)} years`;
 }
 
@@ -158,7 +167,7 @@ export function gcSearchItems(data, normalize) {
         id: i,
         label: obj.name === 'PSR J1745-2900' ? 'Galactic Centre magnetar' : obj.name,
         sublabel: obj.kind === 'magnetar' ? 'PSR J1745-2900 · near Sgr A*'
-            : `${obj.kind === 'cloud' ? 'G object, a dusty cloud' : `S-star · ${obj.type}`} · round Sgr A*`,
+            : `${obj.kind === 'cloud' ? 'G object, a dusty cloud' : obj.group === 'young' ? `Young massive star · ${obj.type}` : `S-star · ${obj.type}`} · round Sgr A*`,
         terms: [...new Set([obj.name, ...obj.aka])].map(normalize),
         sortKey: obj.label ? -4 : 12,
     }))];
@@ -315,7 +324,13 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
     shadow.renderOrder = -1;
     layer.scene.add(shadow);
 
-    let closeUp = 0;
+    let closeUp = 0;   // the close-up as a whole (0..1)
+    let inner = 0;     // the S-stars' scale: the G objects' glows, the magnetar
+    // Each object's size (AU) for its own visibility, and that visibility
+    const scaleAu = objects.map(o => (o.orbit ? o.orbit.apoapsis_au : Math.hypot(...o.position_au)));
+    const shown = new Float32Array(objects.length);
+    const youngApo = objects.filter(o => o.group === 'young' && o.orbit).map(o => o.orbit.apoapsis_au).sort((a, b) => a - b);
+    const youngScaleAu = youngApo.length ? youngApo[youngApo.length >> 1] : 0;
     let lastYear = null;
     const cameraAu = new THREE.Vector3();
     const basisN = new THREE.Vector3();
@@ -327,6 +342,8 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
         objects,
         // How much the close-up shows (0..1): orbits, labels, picking
         closeUp: () => closeUp,
+        // How much object i's own label, orbit and picking show (0..1)
+        shown: (i) => shown[i],
 
         // camera: the master camera (ly); t: the clock's year; height: the
         // view's CSS px; opts: {visible, orbits (lines on), selected (index
@@ -355,19 +372,25 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
             const dist = cameraAu.length();
             const focal = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
             const px = (au) => 2 * au * focal / Math.max(dist, 1e-9);
-            closeUp = THREE.MathUtils.smoothstep(px(s2 ? s2.orbit.apoapsis_au : 2000), ...CLOSE_UP_PX);
+            inner = THREE.MathUtils.smoothstep(px(s2 ? s2.orbit.apoapsis_au : 2000), ...CLOSE_UP_PX);
+            closeUp = Math.max(inner, youngScaleAu ? THREE.MathUtils.smoothstep(px(youngScaleAu), ...CLOSE_UP_PX) : 0);
+            for (let i = 0; i < objects.length; i++) shown[i] = closeUp * THREE.MathUtils.smoothstep(px(scaleAu[i]), ...OBJECT_PX);
             orbitLines.forEach((line, i) => {
                 if (!line) return;
                 const selected = opts.selected === i;
                 const apo = objects[i].orbit.apoapsis_au;
                 const fade = THREE.MathUtils.smoothstep(px(apo), ...ORBIT_PX)
                     * (selected ? 1 : 1 - THREE.MathUtils.smoothstep(apo / Math.max(dist, 1e-9), ...ORBIT_TOO_WIDE));
-                line.material.opacity = (selected ? ORBIT_SELECTED_OPACITY : ORBIT_OPACITY) * fade * (opts.orbits || selected ? 1 : 0) * Math.max(closeUp, selected ? 1 : 0);
+                // A young star's orbit only where its depth is measured (the
+                // disc's plane, an acceleration), else only while selected:
+                // a drawn depth's is one of many that fit
+                const listed = opts.orbits && (objects[i].group !== 'young' || ORBIT_DEPTHS.has(objects[i].depth));
+                line.material.opacity = (selected ? ORBIT_SELECTED_OPACITY : ORBIT_OPACITY) * fade * (listed || selected ? 1 : 0) * Math.max(shown[i], selected ? 1 : 0);
                 line.visible = line.material.opacity > 0.003;
             });
             cloudMaterial.uniforms.uFocalPx.value = focal * pixelRatio;
-            cloudMaterial.uniforms.uFade.value = closeUp;
-            markerMaterial.uniforms.uFade.value = closeUp;
+            cloudMaterial.uniforms.uFade.value = inner;
+            markerMaterial.uniforms.uFade.value = inner;
             // Near plane: a fraction of the way to the nearest thing
             let nearest = dist - data.black_hole.shadow_au;
             for (const p of now) nearest = Math.min(nearest, p.distanceTo(cameraAu));
@@ -389,6 +412,7 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
             let best = null;
             let bestD = radiusPx;
             objects.forEach((obj, i) => {
+                if (shown[i] < 0.3 || (obj.kind !== 'star' && inner < 0.3)) return;
                 this.positionLy(i, p).project(cam);
                 if (p.z > 1 || Math.abs(p.x) > 1.05 || Math.abs(p.y) > 1.05) return;
                 const d = Math.hypot((p.x + 1) / 2 * width - x, (1 - p.y) / 2 * height - y);

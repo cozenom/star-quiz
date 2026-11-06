@@ -550,6 +550,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     // galaxy.json): shown?, an object's card (its index), the data, and
     // whether the close-up is on screen (legend)
     const [showGc, setShowGc] = useState(true);
+    // The browser couldn't start WebGL (its message), or null
+    const [webglError, setWebglError] = useState(null);
     const [selectedGc, setSelectedGc] = useState(null);
     const [gcData, setGcData] = useState(null);
     const [gcShown, setGcShown] = useState(false);
@@ -741,7 +743,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const tooltip = tooltipRef.current;
         const pixelRatio = Math.min(window.devicePixelRatio, 2);
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        let renderer;
+        try {
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+        } catch (error) {
+            console.error(error);
+            setWebglError(error.message);
+            return undefined;
+        }
+        setWebglError(null);
         renderer.setPixelRatio(pixelRatio);
         renderer.setClearColor(0x02040a);
         mount.appendChild(renderer.domElement);
@@ -1861,7 +1871,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     label.el.classList.toggle('selected', selected);
                     label.selected = selected;
                 }
-                const p = gcOn ? toScreen(label.sgrA ? gc.origin : gc.positionLy(label.index, starPosition), width, height) : null;
+                const p = gcOn && (label.sgrA || gc.shown(label.index) > 0.3)
+                    ? toScreen(label.sgrA ? gc.origin : gc.positionLy(label.index, starPosition), width, height) : null;
                 if (p) gcCandidates.push({ label, p, rank: label.sgrA ? 0 : selected ? 1 : 2 });
                 else setLabel(label, null, 0, 0);
             }
@@ -2244,6 +2255,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             glarePass.dispose();
             composer.dispose();
             renderer.dispose();
+            // Give the GPU context back now, not when it's garbage
+            // collected (a reload while working would pile them up)
+            renderer.forceContextLoss();
             mount.removeChild(canvas);
             labelsEl.replaceChildren();
             sceneRef.current = null;
@@ -2680,6 +2694,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             <div className="universe-3d-screen universe-3d-error">
                 <button className="back-button" onClick={onBack}>← Back</button>
                 <p>Failed to load the 3D star catalogue.</p>
+            </div>
+        );
+    }
+    if (webglError) {
+        return (
+            <div className="universe-3d-screen universe-3d-error">
+                <button className="back-button" onClick={onBack}>← Back</button>
+                <p>The browser couldn&apos;t start 3D graphics (WebGL). Restarting the browser usually fixes it; if not, check
+                    that hardware acceleration is on.</p>
+                <p className="star-info-muted">{webglError}</p>
             </div>
         );
     }

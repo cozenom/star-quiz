@@ -223,7 +223,8 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
 // in to it); the rest are in search and the close-up
 function GcObjects({ gc, onSelectGc }) {
     const shown = gc.objects.map((obj, i) => ({ obj, i })).filter(({ obj }) => obj.label);
-    const stars = gc.objects.filter(o => o.kind === 'star').length;
+    const stars = gc.objects.filter(o => o.kind === 'star' && o.group !== 'young').length;
+    const young = gc.objects.filter(o => o.group === 'young').length;
     return (
         <div className="region-part">
             <div className="region-part-head static"><strong>Round the black hole</strong></div>
@@ -231,6 +232,8 @@ function GcObjects({ gc, onSelectGc }) {
                 {stars} stars and {gc.objects.filter(o => o.kind === 'cloud').length} dusty clouds on their measured orbits, moving
                 with the clock (fly in to see them). The closest swing within about 100 AU of it, a few times Neptune&apos;s
                 distance from the Sun, every few years to decades.
+                {young > 0 && ` Further out, ${young} young massive stars, on orbits of thousands of years worked out from how they move
+                (most of their distances along our line of sight drawn).`}
             </p>
             <ul className="region-members">
                 {shown.map(({ obj, i }) => (
@@ -264,6 +267,11 @@ export function GcObjectInfoCard({ obj, data, time, onView, onCentre, onClose })
     const state = gcState(obj, t, data.mass_msun);
     const o = obj.orbit;
     const lightHours = (au) => au * KM_PER_AU / LIGHT_KM_S / 3600;
+    const young = obj.group === 'young';
+    const starRow = obj.kind === 'star' && ['Star', <>{obj.type}, K magnitude {obj.m_k} from Earth
+        <div className="star-info-muted">{obj.type_note ?? 'from its spectrum'}; invisible to the eye from here behind ~30 magnitudes of dust, drawn as if it weren&apos;t</div></>];
+    const depthRow = young && ['Depth', <>{DEPTH_NAMES[obj.depth]}
+        <div className="star-info-muted">{obj.depth_note}</div></>];
     const rows = o ? [
         ['Orbit', <>once round every {gcYears(o.period_yr)} years
             <span className="star-info-muted"> · eccentricity {o.e.toFixed(o.e > 0.9 ? 3 : 2)} ({o.e > 0.9 ? 'a very long ellipse' : o.e > 0.6 ? 'a long ellipse' : o.e > 0.3 ? 'an oval' : 'nearly round'})</span></>],
@@ -275,10 +283,14 @@ export function GcObjectInfoCard({ obj, data, time, onView, onCentre, onClose })
             <div className="star-info-muted">at the clock&apos;s date, as seen from Earth</div></>],
         o.precess_deg * 60 >= 0.05 && ['Turns', <>{(o.precess_deg * 60).toFixed(1)}′ further round each orbit
             <span className="star-info-muted"> · the Schwarzschild precession of Einstein&apos;s gravity, drawn in</span></>],
-        obj.kind === 'star' && ['Star', <>{obj.type}, K magnitude {obj.m_k} from Earth
-            <div className="star-info-muted">{obj.type_note ?? 'from its spectrum'}; invisible to the eye from here behind ~30 magnitudes of dust, drawn as if it weren&apos;t</div></>],
+        starRow,
+        depthRow,
         obj.kind === 'cloud' && ['Drawn as', <>a glow about {2 * data.g_object_radius_au} AU across
             <div className="star-info-muted">its size is of that order; it glows in hydrogen&apos;s light and warm dust</div></>],
+    ] : young ? [
+        ['Where', <>{Math.hypot(...obj.offset_arcsec).toFixed(2)}″ from Sgr A* on the sky in {Math.floor(obj.year)}</>],
+        starRow,
+        depthRow,
     ] : [
         ['From Sgr A*', <>at least {gcDistance(Math.hypot(...obj.position_au))}
             <div className="star-info-muted">{Math.hypot(...obj.offset_arcsec).toFixed(2)}″ from it on the sky in {Math.floor(obj.year)}. {obj.position_note}</div></>],
@@ -307,7 +319,14 @@ export function GcObjectInfoCard({ obj, data, time, onView, onCentre, onClose })
                     </li>
                 </ul>
             </div>
-            {o && (
+            {o && young && (
+                <p className="star-info-muted star-info-origin">
+                    An orbit worked out from where it is and how it moves (measured 1995-2012, the first source) with Sgr A*&apos;s mass,
+                    and its depth as above: unless that is measured, one of the orbits that fit. The pull of the cluster&apos;s own stars,
+                    which matters this far out, isn&apos;t included. Seen from Earth: the light left about 27,000 years earlier.
+                </p>
+            )}
+            {o && !young && (
                 <p className="star-info-muted star-info-origin">
                     Its measured orbit (the first source), drawn as an ellipse that turns slowly as Einstein&apos;s gravity predicts.
                     Further from the years it was watched (1992 onwards), the less sure where it is. Seen from Earth: the light left about 27,000 years earlier.
@@ -318,10 +337,19 @@ export function GcObjectInfoCard({ obj, data, time, onView, onCentre, onClose })
     );
 }
 
+// How a young star's distance along our line of sight was set (build_galactic_centre.py)
+const DEPTH_NAMES = {
+    disc: "From the clockwise disc's plane",
+    acceleration: 'From its measured acceleration',
+    drawn: 'Drawn: not measured',
+    sky: 'Not known',
+};
+
 // The close-up's key, shown while it is on screen
 export function GalacticCentreLegend({ showOrbits, onOpen }) {
     const items = [
         { key: 'stars', swatch: <span className="universe-3d-swatch" style={{ background: '#dbe6ff' }} />, name: 'S-stars (blue-white: young; orange: red giants)' },
+        { key: 'young', swatch: <span className="universe-3d-swatch" style={{ background: '#cfdcff', boxShadow: '0 0 4px #cfdcff' }} />, name: 'Young massive stars, out to ~2 ly (most depths drawn)' },
         showOrbits && { key: 'orbits', swatch: <span className="galaxy-legend-line" style={{ background: 'linear-gradient(90deg, #dbe6ff, #ffc38a)' }} />, name: 'Their measured orbits, in the star\'s colour' },
         { key: 'clouds', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects: dusty clouds' },
         showOrbits && { key: 'cloud-orbits', swatch: <span className="galaxy-legend-line" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects\' orbits' },
