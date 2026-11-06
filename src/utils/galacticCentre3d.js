@@ -71,6 +71,16 @@ const CLOSE_UP_VIEW_AU = 6000;
 const MIN_DISTANCE_AU = 0.4;
 
 const KEPLER_ITERATIONS = 30;
+// The close-up's stars: from among them, hundreds are as bright as the
+// brightest stars from Earth or far brighter (the young ones M_V -5 to -9),
+// and at their true brightness each would get the biggest sprite and glare
+// spike; together they whited out the middle. So (ours): sprites at most
+// this big (CSS px, before the halo; other stars' 24), their halos grown
+// at most this share of the way (a crowd of halos made a white disc), and
+// this share of the glare spike. Their order of brightness stays true.
+const GC_STAR_MAX_PX = 9;
+const GC_STAR_GLOW_MAX = 0.25;
+export const GC_GLARE_SHARE = 0.03;
 
 // Eccentric anomaly for mean anomaly m (radians, any value)
 function eccentricAnomaly(m, e) {
@@ -248,6 +258,9 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
     });
     const starPoints = makeStars(starPositions, starColors, starMags);
     starPoints.material.uniforms.uUnitsPerPc.value = AU_PER_PC;
+    // Smaller sprites than other stars', with less halo (see GC_STAR_MAX_PX)
+    starPoints.material.uniforms.uMaxSize.value = GC_STAR_MAX_PX;
+    starPoints.material.uniforms.uGlowMax = { value: GC_STAR_GLOW_MAX };
     starPoints.frustumCulled = false;
     layer.scene.add(starPoints);
 

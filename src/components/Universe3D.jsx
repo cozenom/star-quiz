@@ -16,7 +16,7 @@ import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { createDustMap, dustMapSource } from '../utils/dustMap';
 import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars, dwarfFloor } from '../utils/landmarks3d';
-import { buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
+import { GC_GLARE_SHARE, buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -1129,6 +1129,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 obj.material.uniforms.uGlare.value = peak;
                 obj.material.uniforms.uGlareMag.value = GLARE_MAG;
             });
+            // The Galactic Centre close-up's crowd of very bright stars: less glare
+            if (gc) gc.starPoints.material.uniforms.uGlare.value = peak * GC_GLARE_SHARE;
             solar?.setGlare(peak, GLARE_MAG);
         };
         applyBloom();

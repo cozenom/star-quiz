@@ -43,10 +43,11 @@ export const SPRITE_VERTEX_GLSL = `
     uniform float uMinAlpha;
     uniform float uGlare;  // the spike's peak while glow follows brightness, else 0
     uniform float uGlareMag;
+    uniform float uGlowMax;  // the halo's growth at most this (0..1; 0, unset: no limit)
     ${VARYINGS}
 
     void spriteFromMagnitude(float mag, vec3 tint) {
-        vGlow = clamp((2.0 - mag) / 5.0, 0.0, 1.0);
+        vGlow = min(clamp((2.0 - mag) / 5.0, 0.0, 1.0), uGlowMax > 0.0 ? uGlowMax : 1.0);
         float size = clamp(2.0 + (6.5 - mag) * 1.3, 1.5, uMaxSize) * (1.0 + vGlow * 2.0);
         gl_PointSize = size * uPixelRatio;
         vSize = gl_PointSize;

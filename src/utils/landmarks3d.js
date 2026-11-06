@@ -91,6 +91,9 @@ const DUST_G = 0.3;
 const DUST_BRIGHT = 0.36;
 const DUST_HIDDEN = 0.15;
 const DUST_CELLS = 28.0;
+// A cloud's points are at most this big (device px); a part with
+// near_fade (landmarks.json, CSS px) fades those bigger, gone at twice it
+const CLOUD_MAX_PX = 64;
 
 const vertexShader = /* glsl */ `
     attribute vec3 color;
@@ -363,6 +366,7 @@ const cloudVertexShader = /* glsl */ `
     attribute vec3 rgb;
     uniform float uFocalPx;
     uniform float uPointLy;
+    uniform float uNearFade;  // > 0: points bigger than this (device px) fade out, gone at twice it
     varying float vFlux;
     varying vec3 vRgb;
     ${occlusionGlsl}
@@ -370,9 +374,12 @@ const cloudVertexShader = /* glsl */ `
         vec4 world = modelMatrix * vec4(position, 1.0);
         vec4 mv = viewMatrix * world;
         float size = uPointLy * uFocalPx / max(-mv.z, 1e-6);  // device px
-        gl_PointSize = clamp(size, 1.0, 64.0);
+        gl_PointSize = clamp(size, 1.0, ${CLOUD_MAX_PX.toFixed(1)});
         float hidden = uOccOn > 0.5 ? max(behind(world.xyz, uOccC0, uOccM0), behind(world.xyz, uOccC1, uOccM1)) : 0.0;
-        vFlux = flux * min(size * size, 1.0) * mix(1.0, ${DUST_HIDDEN.toFixed(3)}, hidden);
+        // Close by, a point grows big and would show as a blob of its own:
+        // with near_fade (px), its light goes (left to the haze round it)
+        float near = uNearFade > 0.0 ? 1.0 - smoothstep(uNearFade, 2.0 * uNearFade, size) : 1.0;
+        vFlux = flux * min(size * size, 1.0) * near * mix(1.0, ${DUST_HIDDEN.toFixed(3)}, hidden);
         vRgb = rgb;
         gl_Position = projectionMatrix * mv;
     }
@@ -494,6 +501,7 @@ function nebulaCloud(buffer, model, centre, pixelRatio, occluders) {
             uFade: { value: 0 },
             uFocalPx: { value: 1 },
             uPointLy: { value: model.point_ly * pixelRatio },
+            uNearFade: { value: (model.near_fade ?? 0) * pixelRatio },
             ...occlusionUniforms(occluders, centre),
         },
         vertexShader: cloudVertexShader,
