@@ -333,7 +333,7 @@ export const CENTRE_LABEL = 'Galactic Centre (Sgr A*)';
 export const GALAXY_SEARCH = [
     { id: 'milky_way', label: 'Milky Way', sublabel: 'Our galaxy (model)', terms: ['galaxy', 'our galaxy', 'the galaxy'] },
     { id: 'centre', label: 'Galactic Centre', sublabel: 'Sagittarius A*, a supermassive black hole',
-        terms: ['galactic center', 'sgr a*', 'sgr a', 'sagittarius a*', 'sagittarius a', 'black hole', 'centre of the galaxy'] },
+        terms: ['galactic center', 'sgr a*', 'sgr a', 'sag a*', 'sag a', 'sagittarius a*', 'sagittarius a', 'black hole', 'centre of the galaxy'] },
     { id: 'Local', label: ARM_LABELS.Local, sublabel: 'The Sun\'s arm', terms: ['orion arm', 'orion spur', 'local arm', 'orion-cygnus arm'] },
     { id: 'Perseus', label: ARM_LABELS.Perseus, sublabel: 'Spiral arm', terms: ['perseus arm'] },
     { id: 'Sagittarius-Carina', label: ARM_LABELS['Sagittarius-Carina'], sublabel: 'Spiral arm', terms: ['sagittarius arm', 'carina arm'] },

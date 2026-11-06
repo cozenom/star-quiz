@@ -1,6 +1,8 @@
 import React from 'react';
 import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
 import { DWARF_COLOR, DWARF_TRUE_COLOR, LANDMARK_NAMES, GLOBULAR_COLOR, NEBULA_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
+import { GC_CLOUD_COLOR, GC_MAGNETAR_COLOR, gcKindName, gcState, msOf, yearOf } from '../utils/galacticCentre3d';
+import { AU_PER_LY, KM_PER_AU } from '../utils/universe3d';
 import MapLegend from './MapLegend';
 
 // The Milky Way model's cards: the galaxy as a whole (with the key to the
@@ -190,7 +192,8 @@ function MilkyWay({ card, actions, trueColors }) {
     );
 }
 
-function Centre({ card, bar, onSelectMaser, actions }) {
+function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
+    const shadow = gc?.black_hole;
     return (
         <>
             <h3 className="star-info-title">Galactic Centre</h3>
@@ -201,13 +204,128 @@ function Centre({ card, bar, onSelectMaser, actions }) {
                 ['Distance', `${fmt(card.distance)} ly, in ${card.constellation}`],
                 ['Mass', `${(card.mass_msun / 1e6).toFixed(1)} million Suns`],
                 ['Event horizon', <>{(card.horizon_km / 1e6).toFixed(1)} million km in radius ({card.horizon_au} AU) <span className="star-info-muted">· worked out from its mass</span></>],
+                shadow && ['Shadow', <>{shadow.shadow_au.toFixed(2)} AU in radius, {shadow.shadow_uas} microarcseconds across from here
+                    <div className="star-info-muted">{shadow.about}. Drawn black at its true size in the close-up.</div></>],
                 ['Bar', `${fmt(bar.bar_half_length * 2)} ly long, around it`],
                 ...card.facts.map(f => [f.label, f.value]),
             ]} />
+            {gc && <GcObjects gc={gc} onSelectGc={onSelectGc} />}
             <Objects objects={card.objects} onSelectMaser={onSelectMaser} />
-            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
+            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
         </>
     );
+}
+
+// The labelled ones orbiting Sgr A*, each opening its card (and flying
+// in to it); the rest are in search and the close-up
+function GcObjects({ gc, onSelectGc }) {
+    const shown = gc.objects.map((obj, i) => ({ obj, i })).filter(({ obj }) => obj.label);
+    const stars = gc.objects.filter(o => o.kind === 'star').length;
+    return (
+        <div className="region-part">
+            <div className="region-part-head static"><strong>Round the black hole</strong></div>
+            <p className="star-info-muted region-part-about">
+                {stars} stars and {gc.objects.filter(o => o.kind === 'cloud').length} dusty clouds on their measured orbits, moving
+                with the clock (fly in to see them). The closest swing within about 100 AU of it, a few times Neptune&apos;s
+                distance from the Sun, every few years to decades.
+            </p>
+            <ul className="region-members">
+                {shown.map(({ obj, i }) => (
+                    <li key={obj.id}>
+                        <button className="region-member galaxy-object" onClick={() => onSelectGc(i)}>
+                            <div className="galaxy-object-head">
+                                <span>{obj.kind === 'magnetar' ? 'Magnetar' : obj.name}</span>
+                                <span className="star-info-muted">
+                                    {obj.orbit ? `every ${gcYears(obj.orbit.period_yr)} years` : 'orbit unknown'} ›
+                                </span>
+                            </div>
+                            <div className="star-info-muted">{gcKindName(obj)}</div>
+                        </button>
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
+}
+
+const gcYears = (p) => (p < 100 ? p.toFixed(1) : fmt(p));
+// AU, or ly once that's shorter to read
+const gcDistance = (au) => (au < 10000 ? `${fmt(roundSig(au, 3))} AU` : `${roundSig(au / AU_PER_LY, 2)} ly (${fmt(roundSig(au, 3))} AU)`);
+const LIGHT_KM_S = 299792.458;
+const monthYear = (year) => new Date(msOf(year)).toLocaleDateString(undefined, { year: 'numeric', month: 'short', timeZone: 'UTC' });
+
+// One of the things orbiting Sgr A* (galactic_centre.json objects[i]).
+// time: the clock (ms), for where it is now and its next closest approach.
+export function GcObjectInfoCard({ obj, data, time, onView, onCentre, onClose }) {
+    const t = yearOf(time);
+    const state = gcState(obj, t, data.mass_msun);
+    const o = obj.orbit;
+    const lightHours = (au) => au * KM_PER_AU / LIGHT_KM_S / 3600;
+    const rows = o ? [
+        ['Orbit', <>once round every {gcYears(o.period_yr)} years
+            <span className="star-info-muted"> · eccentricity {o.e.toFixed(o.e > 0.9 ? 3 : 2)} ({o.e > 0.9 ? 'a very long ellipse' : o.e > 0.6 ? 'a long ellipse' : o.e > 0.3 ? 'an oval' : 'nearly round'})</span></>],
+        ['Closest', <>{gcDistance(o.periapsis_au)} from Sgr A*, at {fmt(o.speed_peri_km_s)} km/s
+            <span className="star-info-muted"> ({(o.speed_peri_km_s / LIGHT_KM_S * 100).toFixed(1)}% of light&apos;s speed)</span>
+            <div className="star-info-muted">next: {monthYear(state.nextPeri)}</div></>],
+        ['Farthest', <>{gcDistance(o.apoapsis_au)}, at {fmt(o.speed_apo_km_s)} km/s</>],
+        ['Now', <>{gcDistance(state.distanceAu)} from it ({lightHours(state.distanceAu) < 48 ? `${lightHours(state.distanceAu).toFixed(1)} light-hours` : `${(lightHours(state.distanceAu) / 24).toFixed(0)} light-days`}), moving at {fmt(state.speedKmS)} km/s
+            <div className="star-info-muted">at the clock&apos;s date, as seen from Earth</div></>],
+        o.precess_deg * 60 >= 0.05 && ['Turns', <>{(o.precess_deg * 60).toFixed(1)}′ further round each orbit
+            <span className="star-info-muted"> · the Schwarzschild precession of Einstein&apos;s gravity, drawn in</span></>],
+        obj.kind === 'star' && ['Star', <>{obj.type}, K magnitude {obj.m_k} from Earth
+            <div className="star-info-muted">{obj.type_note ?? 'from its spectrum'}; invisible to the eye from here behind ~30 magnitudes of dust, drawn as if it weren&apos;t</div></>],
+        obj.kind === 'cloud' && ['Drawn as', <>a glow about {2 * data.g_object_radius_au} AU across
+            <div className="star-info-muted">its size is of that order; it glows in hydrogen&apos;s light and warm dust</div></>],
+    ] : [
+        ['From Sgr A*', <>at least {gcDistance(Math.hypot(...obj.position_au))}
+            <div className="star-info-muted">{Math.hypot(...obj.offset_arcsec).toFixed(2)}″ from it on the sky in {Math.floor(obj.year)}. {obj.position_note}</div></>],
+        ['Moves', <>{fmt(obj.proper_motion_km_s)} km/s across the sky
+            <div className="star-info-muted">its orbit isn&apos;t known, so it is drawn where it was measured</div></>],
+    ];
+    return (
+        <div className="star-info region-info">
+            <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
+            <h3 className="star-info-title">{obj.kind === 'magnetar' ? 'Galactic Centre magnetar' : obj.name}</h3>
+            <div className="star-info-subtitle">
+                {obj.kind === 'magnetar' ? obj.name : gcKindName(obj)}{obj.aka.length > 0 && obj.kind !== 'magnetar' ? ` · also ${obj.aka[0]}` : ''}
+            </div>
+            <div className="star-info-actions">
+                <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
+            </div>
+            {obj.note && <p className="star-info-origin">{obj.note}</p>}
+            <Facts rows={rows} />
+            <div className="region-part">
+                <ul className="region-members">
+                    <li>
+                        <button className="region-member" onClick={onCentre}>
+                            <span>Sgr A*, the black hole</span>
+                            <span className="star-info-muted">›</span>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+            {o && (
+                <p className="star-info-muted star-info-origin">
+                    Its measured orbit (the first source), drawn as an ellipse that turns slowly as Einstein&apos;s gravity predicts.
+                    Further from the years it was watched (1992 onwards), the less sure where it is. Seen from Earth: the light left about 27,000 years earlier.
+                </p>
+            )}
+            <Sources refs={obj.refs} />
+        </div>
+    );
+}
+
+// The close-up's key, shown while it is on screen
+export function GalacticCentreLegend({ showOrbits, onOpen }) {
+    const items = [
+        { key: 'stars', swatch: <span className="universe-3d-swatch" style={{ background: '#dbe6ff' }} />, name: 'S-stars (blue-white: young; orange: red giants)' },
+        showOrbits && { key: 'orbits', swatch: <span className="galaxy-legend-line" style={{ background: 'linear-gradient(90deg, #dbe6ff, #ffc38a)' }} />, name: 'Their measured orbits, in the star\'s colour' },
+        { key: 'clouds', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects: dusty clouds' },
+        showOrbits && { key: 'cloud-orbits', swatch: <span className="galaxy-legend-line" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects\' orbits' },
+        { key: 'magnetar', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_MAGNETAR_COLOR) }} />, name: 'Magnetar' },
+        { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: 'Sgr A*\'s shadow (true size)' },
+    ].filter(Boolean);
+    return <MapLegend title="Galactic Centre" onTitle={onOpen} storageKey="universe3d.legend.gc" items={items} />;
 }
 
 function Arm({ id, card, maserShort, onSelectMaser, actions }) {
@@ -245,7 +363,9 @@ function Arm({ id, card, maserShort, onSelectMaser, actions }) {
 // id: 'milky_way', 'centre' or an arm name; cards: galaxy.json cards;
 // onSelect(id) opens another card, onSelectMaser(index) a maser's;
 // onView flies the camera to this one; trueColors: true colour mode is on
-function GalaxyInfoCard({ id, cards, onSelect, onSelectMaser, onView, onClose, trueColors = false }) {
+// gc: galactic_centre.json (null until in): the centre's card lists
+// what orbits Sgr A* (onSelectGc(index)) and flies in to it (onCloseUp)
+function GalaxyInfoCard({ id, cards, gc = null, onSelect, onSelectMaser, onSelectGc, onCloseUp, onView, onClose, trueColors = false }) {
     const arm = cards.arms[id];
     // (under the title, which each part draws)
     const actions = (
@@ -253,13 +373,16 @@ function GalaxyInfoCard({ id, cards, onSelect, onSelectMaser, onView, onClose, t
             <button className="button-primary star-info-fly" onClick={onView}>
                 {id === 'milky_way' ? 'View the whole galaxy' : 'Fly there'}
             </button>
+            {id === 'centre' && gc && (
+                <button className="button-secondary star-info-fly" onClick={onCloseUp}>Close-up</button>
+            )}
         </div>
     );
     return (
         <div className="star-info region-info">
             <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
             {id === 'milky_way' && <MilkyWay card={cards.milky_way} actions={actions} trueColors={trueColors} />}
-            {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} onSelectMaser={onSelectMaser} actions={actions} />}
+            {id === 'centre' && <Centre card={cards.centre} bar={cards.milky_way} gc={gc} onSelectMaser={onSelectMaser} onSelectGc={onSelectGc} actions={actions} />}
             {arm && <Arm id={id} card={arm} maserShort={cards.milky_way.maser_short} onSelectMaser={onSelectMaser} actions={actions} />}
             <Links current={id} cards={cards} onSelect={onSelect} />
         </div>

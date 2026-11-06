@@ -15,6 +15,7 @@ import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { createDustMap, dustMapSource } from '../utils/dustMap';
 import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars, dwarfFloor } from '../utils/landmarks3d';
+import { buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -35,7 +36,7 @@ import {
     starRecord,
 } from '../utils/universe3d';
 import { RING_FEATURES, RING_FEATURES_BY_ID, ringLabelKm, ringPole, ringScaleKm, ringSubtitle } from '../utils/rings';
-import GalaxyInfoCard, { ClusterInfoCard, GalaxyLegend, MaserInfoCard } from './GalaxyInfoCard';
+import GalaxyInfoCard, { ClusterInfoCard, GalacticCentreLegend, GalaxyLegend, GcObjectInfoCard, MaserInfoCard } from './GalaxyInfoCard';
 import MapLegend from './MapLegend';
 import PlanetInfoCard from './PlanetInfoCard';
 import RegionInfoCard from './RegionInfoCard';
@@ -171,6 +172,7 @@ const LINE_OPTIONS = [
     },
     { kind: 'maserRanges', label: 'Maser distance ranges', needs: 'masers', title: 'The faint line through each measured maser: its distance\'s uncertainty' },
     { kind: 'galacticAxis', label: 'Galactic axis', needs: 'galaxy', title: 'A line through the galaxy\'s centre, square to its disc, out to galactic north and south' },
+    { kind: 'gcOrbits', label: 'Orbits round Sgr A*', needs: 'galaxy', title: 'In the Galactic Centre close-up: the measured orbits of the stars and dusty clouds round the black hole' },
 ];
 
 // The galactic poles on the sky (J2000, as Hipparcos defines them), in
@@ -199,16 +201,18 @@ const GALACTIC_POLES = [
 // up close. modelViewMatrix * position would round the camera to float32
 // (~2 AU at 500 ly) and the sprite would jump around next to its disc.
 // The star Points sit at the layer origin, so mat3(modelViewMatrix) is just
-// the view's rotation.
+// the view's rotation. uUnitsPerPc: the layer's units per parsec (ly; the
+// Galactic Centre close-up's stars are in AU).
 const STAR_VERTEX_GLSL = `
     uniform vec3 uCamHigh;
     uniform vec3 uCamLow;
+    uniform float uUnitsPerPc;
     ${SPRITE_VERTEX_GLSL}
 
     void placeStar(vec3 pos, vec3 color, float absMag) {
         vec3 relative = (pos - uCamHigh) - uCamLow;
         vec4 mvPosition = vec4(mat3(modelViewMatrix) * relative, 1.0);
-        float distPc = max(length(mvPosition.xyz) / ${LY_PER_PARSEC}, 1e-9);
+        float distPc = max(length(mvPosition.xyz) / uUnitsPerPc, 1e-9);
         float mag = absMag + 5.0 * log(distPc) / log(10.0) - 5.0;
         spriteFromMagnitude(mag, color);
         gl_Position = projectionMatrix * mvPosition;
@@ -312,6 +316,7 @@ function makeStarMaterial(vertexShader, pixelRatio, starCamera, maxSize, decodin
             uMinAlpha: { value: STAR_MIN_ALPHA },
             uGlare: { value: 0 },
             uGlareMag: { value: GLARE_MAG },
+            uUnitsPerPc: { value: LY_PER_PARSEC },
             ...starCamera,
             ...decoding,
         },
@@ -451,6 +456,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         smallBodyOrbits: true,
         maserRanges: true,
         galacticAxis: true,
+        gcOrbits: true,
     });
     const linesOn = (kind) => showLines && lineKinds[kind];
     const [showLabels, setShowLabels] = useState(true);
@@ -539,6 +545,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [landmarks, setLandmarks] = useState(null);
     const [clustersShown, setClustersShown] = useState(noClusters);
     const showClusterKind = (kind, on) => setShowClusters(prev => ({ ...prev, [kind]: on }));
+    // The Galactic Centre close-up (galactic_centre.json, fetched with
+    // galaxy.json): shown?, an object's card (its index), the data, and
+    // whether the close-up is on screen (legend)
+    const [showGc, setShowGc] = useState(true);
+    const [selectedGc, setSelectedGc] = useState(null);
+    const [gcData, setGcData] = useState(null);
+    const [gcShown, setGcShown] = useState(false);
     const galaxyDataRef = useRef(null);
     const loadGalaxyData = () => {
         if (!galaxyDataRef.current) {
@@ -551,12 +564,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 console.error('Error loading the landmarks:', error);
                 return null;
             });
-            galaxyDataRef.current = Promise.all([get('galaxy.json'), landmarks])
-                .then(([data, marks]) => {
+            // So is the Galactic Centre close-up
+            const centre = get('galactic_centre.json').catch((error) => {
+                console.error('Error loading the Galactic Centre close-up:', error);
+                return null;
+            });
+            galaxyDataRef.current = Promise.all([get('galaxy.json'), landmarks, centre])
+                .then(([data, marks, gc]) => {
                     data.landmarks = marks;
+                    data.gc = gc;
                     setGalaxyCards(data.cards);
                     setGalaxyMasers(data.masers);
                     setLandmarks(marks);
+                    setGcData(gc);
                     return data;
                 })
                 .catch(error => {
@@ -672,8 +692,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     sortKey: info.labelled ? -5 : 15,
                 };
             }) : [])),
+            ...(gcData ? gcSearchItems(gcData, normalizeSearchText) : []),
         ] : []),
-        [constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies, galaxyMasers, landmarks]
+        [constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies, galaxyMasers, landmarks, gcData]
     );
 
     const selectedHips = useMemo(
@@ -681,7 +702,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster };
+    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, showGc, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster, selectedGc };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -690,6 +711,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         setSelectedGalaxy(null);
         setSelectedMaser(null);
         setSelectedCluster(null);
+        setSelectedGc(null);
         setSelectedStar(index);
     };
     const selectBody = (id) => {
@@ -699,6 +721,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         setSelectedGalaxy(null);
         setSelectedMaser(null);
         setSelectedCluster(null);
+        setSelectedGc(null);
         setSelectedBody(id);
     };
 
@@ -736,7 +759,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // camera, so it turns with the view but never moves
         const skyLayer = createLayer({ name: 'sky', unit: 1, origin: () => camera.position, near: 0.1, far: 1000 });
         skyLayer.visible = false;
-        const layers = [skyLayer, starLayer, starDisc.layer, solarLayer];
+        // The Galactic Centre close-up (AU, at Sgr A*), filled once its data is in
+        const gcLayer = createGalacticCentreLayer();
+        const layers = [skyLayer, starLayer, gcLayer.layer, starDisc.layer, solarLayer];
         const scene = starLayer.scene;
         const starCamera = starLayer.camera;  // for picking and labels
         const solarCamera = solarLayer.camera;
@@ -918,7 +943,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             });
         };
         // Every star Points, for the settings they share
-        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints()].filter(Boolean);
+        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints(), gc?.starPoints].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -956,6 +981,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const clusterStars = {};   // kind -> star Points, once loaded (dwarf galaxies: a Group of one per galaxy)
         const clusterStarPoints = () => Object.values(clusterStars).flatMap(o => (o.isGroup ? o.children : [o]));
         const clusterStarsRequested = new Set();
+        // The Galactic Centre close-up (utils/galacticCentre3d): its stars
+        // use the star shader with their own camera uniforms, in AU
+        let gc = null;
+        const gcStarCamera = makeStarCamera();
         let disposed = false;
         const loadClusterStars = (kind) => {
             const g = clusterData[kind];
@@ -1006,6 +1035,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 if (!data.landmarks?.[kind]) continue;
                 clusterData[kind] = data.landmarks[kind];
                 clusters[kind] = buildClusters(scene, kind, clusterData[kind], pixelRatio);
+            }
+            if (data.gc) {
+                gc = buildGalacticCentre(gcLayer, data.gc, pixelRatio, {
+                    makeStars: (p, c, m) => makeStarPoints(p, c, m, pixelRatio, gcStarCamera),
+                    starCamera: gcStarCamera,
+                    bvToColor,
+                });
+                s.gc = gc;
+                applyBloom();
             }
         }).catch(error => console.error('Error loading the galaxy model:', error));
 
@@ -1316,13 +1354,24 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             return null;
         };
 
+        // Something orbiting Sgr A* under the point (in the close-up), or null
+        const pickGc = (clientX, clientY, radiusPx) => {
+            if (!gc) return null;
+            const rect = renderer.domElement.getBoundingClientRect();
+            syncLayerCamera(starLayer, camera);
+            return gc.pick(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
+        };
+
         // Planets win over stars: they're drawn on top. Cloud dots come
         // between, for hovering (withCloud): they have no card to open.
         // The galaxy's masers and star clusters come next after planets
-        // (drawn over its stars).
+        // (drawn over its stars); in the Galactic Centre close-up, what
+        // orbits Sgr A* before them.
         const pickAny = (clientX, clientY, radiusPx, withCloud = false) => {
             const id = pickBody(clientX, clientY, radiusPx);
             if (id !== null) return { type: 'body', id };
+            const gcIndex = pickGc(clientX, clientY, Math.min(radiusPx, 12));
+            if (gcIndex !== null) return { type: 'gc', index: gcIndex };
             const maser = pickMaser(clientX, clientY, Math.min(radiusPx, 10));
             if (maser !== null) return { type: 'maser', index: maser };
             const cluster = pickCluster(clientX, clientY, Math.min(radiusPx, 10));
@@ -1365,7 +1414,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const showHover = (hit) => {
             placeRing(hoverRing, hit?.type === 'star' ? positions.subarray(hit.index * 3, hit.index * 3 + 3)
                 : hit?.type === 'maser' ? galaxy.maser(hit.index).position
-                : hit?.type === 'cluster' ? clusters[hit.kind].info(hit.index).position : null);
+                : hit?.type === 'cluster' ? clusters[hit.kind].info(hit.index).position
+                : hit?.type === 'gc' ? gc.positionLy(hit.index).toArray() : null);
             placeRing(bodyHoverRing, hit?.type === 'body' ? solar.byId.get(hit.id).position.toArray()
                 : hit?.type === 'cloud' ? hit.position : null);
             if (hit?.type === 'cloud') {
@@ -1395,6 +1445,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let pressedRegion = null;  // likewise a region's (the Oort cloud's)
         let pressedGalaxy = null;  // and the galaxy's (its centre or an arm)
         let pressedCluster = null;  // and a star cluster's ({kind, index})
+        let pressedGc = null;  // and what orbits Sgr A* (its index)
         const onPointerDown = (e) => {
             downAt = { x: e.clientX, y: e.clientY };
             // Hide the hover state while dragging; it is stale once the view moves
@@ -1406,22 +1457,25 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             const labelRegion = pressedRegion;
             const labelGalaxy = pressedGalaxy;
             const labelCluster = pressedCluster;
+            const labelGc = pressedGc;
             pressedRing = null;
             pressedRegion = null;
             pressedGalaxy = null;
             pressedCluster = null;
+            pressedGc = null;
             if (!downAt || e.button !== 0) return;
             const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
             downAt = null;
             if (moved > 5) return;
             // Ring features, the Oort cloud and the galaxy are picked by
             // their labels (star clusters by theirs too, or their markers)
-            const hit = ringId || labelRegion || labelGalaxy || labelCluster ? null
+            const hit = ringId || labelRegion || labelGalaxy || labelCluster || labelGc !== null ? null
                 : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
             // A maser opens its arm's card (the Milky Way's if it's on none)
             setSelectedGalaxy(labelGalaxy);
             setSelectedMaser(hit?.type === 'maser' ? hit.index : null);
             setSelectedCluster(labelCluster ?? (hit?.type === 'cluster' ? { kind: hit.kind, index: hit.index } : null));
+            setSelectedGc(labelGc ?? (hit?.type === 'gc' ? hit.index : null));
             setSelectedStar(hit?.type === 'star' ? hit.index : null);
             setSelectedBody(hit?.type === 'body' ? hit.id : null);
             setSelectedRing(ringId);
@@ -1444,6 +1498,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         : hit.type === 'cloud' ? dotLabel(hit)
                         : hit.type === 'maser' ? galaxy.maser(hit.index).label
                         : hit.type === 'cluster' ? clusters[hit.kind].info(hit.index).label
+                        : hit.type === 'gc' ? gcLabel(gc.objects[hit.index])
                         : solar.byId.get(hit.id).name;
                     tooltip.style.display = 'block';
                     tooltip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 10}px)`;
@@ -1548,6 +1603,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         }));
         let axisLabels = [];
         const clusterLabels = {};  // kind -> labels, made once that kind is in
+        let gcLabels = [];  // the Galactic Centre close-up's, made once it's in
         // Body and ring label sizes (px) for the overlap tests, measured
         // together once the view is laid out
         let labelsMeasured = false;
@@ -1699,8 +1755,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 label.el.style.display = label.shown ? 'block' : 'none';
             };
             const galaxyLabelsOn = opts.showLabels && galaxy.fade() > 0.3;
+            // In the Galactic Centre close-up its own labels take over
+            const gcOn = opts.showLabels && gc && gcLayer.layer.visible && gc.closeUp() > 0.3;
             for (const label of galaxyLabels) {
-                const p = galaxyLabelsOn ? toScreen(label.position, width, height) : null;
+                const p = galaxyLabelsOn && !(gcOn && label.id === 'centre') ? toScreen(label.position, width, height) : null;
                 if (p) {
                     measure(label);
                     skyBoxes.push({ x: p[0] - label.w / 2, y: p[1] - label.h / 2, w: label.w, h: label.h });
@@ -1776,6 +1834,36 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     }
                 }
                 const free = selected || !hitsSky(box);
+                if (free) skyBoxes.push(box);
+                setLabel(label, free ? [box.x, box.y] : null, 0, 0);
+            }
+            // The close-up: Sgr A* (opens the centre's card), then the
+            // selected object, then the curated few, each where it's free
+            if (gc && !gcLabels.length) {
+                gcLabels = [
+                    { sgrA: true, el: makeLabelEl('Sgr A*', 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
+                    ...gc.labels().map(l => ({ index: l.index, el: makeLabelEl(l.name, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 })),
+                ];
+                for (const label of gcLabels) {
+                    makeClickable(label.el, label.sgrA ? () => { pressedGalaxy = 'centre'; } : () => { pressedGc = label.index; });
+                }
+            }
+            const gcCandidates = [];
+            for (const label of gcLabels) {
+                const selected = label.sgrA ? opts.selectedGalaxy === 'centre' : opts.selectedGc === label.index;
+                if (selected !== label.selected) {
+                    label.el.classList.toggle('selected', selected);
+                    label.selected = selected;
+                }
+                const p = gcOn ? toScreen(label.sgrA ? gc.origin : gc.positionLy(label.index, starPosition), width, height) : null;
+                if (p) gcCandidates.push({ label, p, rank: label.sgrA ? 0 : selected ? 1 : 2 });
+                else setLabel(label, null, 0, 0);
+            }
+            gcCandidates.sort((a, b) => a.rank - b.rank);
+            for (const { label, p, rank } of gcCandidates) {
+                measure(label);
+                const box = { x: p[0] + 8, y: p[1] - 8, w: label.w, h: label.h };
+                const free = rank < 2 || !hitsSky(box);
                 if (free) skyBoxes.push(box);
                 setLabel(label, free ? [box.x, box.y] : null, 0, 0);
             }
@@ -1956,6 +2044,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let cloudWasShown = false;
         let masersWereShown = false;
         let clustersWereShown = noClusters;
+        let gcWasShown = false;
         const animate = (now) => {
             advanceClock(now);
             updateFlight(now);
@@ -2027,6 +2116,22 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 clustersWereShown = clustersNow;
                 setClustersShown(clustersNow);
             }
+            // The Galactic Centre close-up, where the clock has it; the
+            // selection ring rides along with what it's on
+            if (gc) {
+                const o = optionsRef.current;
+                gc.update(camera, yearOf(clockRef.current.time), mount.clientHeight, {
+                    visible: o.showGalaxy && o.showGc,
+                    orbits: o.showLines && o.lineKinds.gcOrbits,
+                    selected: o.selectedGc,
+                });
+                if (o.selectedGc !== null) placeRing(selectedRing, gc.positionLy(o.selectedGc).toArray());
+                const gcNow = gcLayer.layer.visible && gc.closeUp() > 0.3;
+                if (gcNow !== gcWasShown) {
+                    gcWasShown = gcNow;
+                    setGcShown(gcNow);
+                }
+            }
             if (s.step && !s.flight) {
                 const d = camera.position.distanceTo(controls.target);
                 if (s.stepDistance === null) s.stepDistance = d;
@@ -2083,6 +2188,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             starDisc.update(camera, mount.clientHeight);
             syncCameras();
             setStarCamera(starCameraUniforms, starCamera.position);
+            gc?.syncStarCamera(setStarCamera);
             solar?.updateMinorMoonFade(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateTextures(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateRingView(solarCamera.position);
@@ -2123,6 +2229,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             band?.dispose();
             galaxyDust?.dispose();
             Object.values(clusters).forEach(c => c.dispose());
+            gc?.dispose();
             dust.dispose();
             starDisc.dispose();
             glarePass.dispose();
@@ -2309,9 +2416,36 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         }).catch(error => console.error('Error loading the galaxy model:', error));
     };
 
+    // Something orbiting Sgr A*: its card without moving
+    const selectGc = (index) => {
+        selectStar(null);
+        setSelectedGc(index);
+    };
+    // Fly in to it (its whole orbit in view, as seen from Earth's side,
+    // looking at Sgr A*) and open its card; index null: the close-up of
+    // the S-stars round Sgr A*, keeping the centre's card
+    const viewGc = (index) => {
+        const s = sceneRef.current;
+        if (!s) return;
+        setShowGalaxy(true);
+        setShowGc(true);
+        if (index !== null) selectGc(index);
+        setFocus({ type: 'gc', index });
+        loadGalaxyData().then((data) => {
+            if (sceneRef.current !== s || !data.gc) return;
+            const pose = gcPose(data.gc, index);
+            s.setFollow(null);
+            s.flyTo(pose.position, pose.target, pose.minDistance);
+        }).catch(error => console.error('Error loading the galaxy model:', error));
+    };
+
     const handleSearchSelect = (item) => {
         if (item.type === 'galaxy') {
             viewGalaxy(item.id);
+        } else if (item.type === 'gc') {
+            // Sgr A* itself: the close-up, with the centre's card
+            if (item.id === null) openGalaxyCard('centre');
+            viewGc(item.id);
         } else if (item.type === 'maser') {
             viewMaser(item.id);
         } else if (item.type === 'cluster') {
@@ -2501,11 +2635,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         placeRing(s.selectedRing, i !== null ? starBuffers.positions.subarray(i * 3, i * 3 + 3)
             : selectedMaser !== null && galaxyMasers ? galaxyMasers.xyz_ly.slice(selectedMaser * 3, selectedMaser * 3 + 3)
             : selectedCluster && landmarks?.[selectedCluster.kind]
-                ? landmarks[selectedCluster.kind].xyz_ly.slice(selectedCluster.index * 3, selectedCluster.index * 3 + 3) : null);
+                ? landmarks[selectedCluster.kind].xyz_ly.slice(selectedCluster.index * 3, selectedCluster.index * 3 + 3)
+            // (the render loop keeps it on its moving object)
+            : selectedGc !== null && s.gc ? s.gc.positionLy(selectedGc).toArray() : null);
         placeRing(s.bodySelectedRing, selectedBody && s.solar ? s.solar.byId.get(selectedBody).position.toArray() : null);
         s.selectedBodyId = selectedBody;  // the render loop keeps the ring on it as time runs
         s.solar?.setHighlightOrbit(selectedBody);
-    }, [selectedStar, selectedBody, selectedMaser, galaxyMasers, selectedCluster, landmarks, starBuffers, planetFacts, moonsData]);
+    }, [selectedStar, selectedBody, selectedMaser, galaxyMasers, selectedCluster, landmarks, selectedGc, gcData, starBuffers, planetFacts, moonsData]);
 
     // Keyboard: Esc closes the card and clears the selection (it never leaves
     // the 3D view: the Back button does). L lines, N names, R reset.
@@ -2547,6 +2683,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const maser = selectedMaser !== null && galaxyMasers && galaxyCards ? maserInfo(galaxyMasers, selectedMaser) : null;
     const cluster = selectedCluster && landmarks?.[selectedCluster.kind]
         ? clusterInfo(selectedCluster.kind, landmarks[selectedCluster.kind], selectedCluster.index) : null;
+    const gcObject = selectedGc !== null && gcData ? gcData.objects[selectedGc] : null;
     // Current distances (AU), for the card
     const bodyDistances = body && {
         sun: body.position.length(),
@@ -2596,6 +2733,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const info = maserInfo(galaxyMasers, focus.index);
         title = info.name;
         subtitle = `Maser · ${info.armName}`;
+    } else if (focus.type === 'gc' && gcData) {
+        const obj = focus.index !== null ? gcData.objects[focus.index] : null;
+        title = obj ? obj.name : 'Galactic Centre';
+        subtitle = obj ? gcKindName(obj) : 'Close-up: Sgr A* and the stars round it';
     } else if (focus.type === 'cluster' && landmarks?.[focus.kind]) {
         const info = clusterInfo(focus.kind, landmarks[focus.kind], focus.index);
         title = info.name;
@@ -2612,7 +2753,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     }
 
     return (
-        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser || cluster ? 'has-card' : ''} ${legendsShifted ? 'legends-shifted' : ''}`}>
+        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser || cluster || gcObject ? 'has-card' : ''} ${legendsShifted ? 'legends-shifted' : ''}`}>
             <div className="universe-3d-canvas" ref={mountRef} />
             <div className="universe-3d-labels" ref={labelsRef} />
             <div className="universe-3d-tooltip" ref={tooltipRef} />
@@ -2915,6 +3056,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     </label>
                     <label
                         className={`universe-3d-checkbox ${showGalaxy ? '' : 'disabled'}`}
+                        title="Fly in to Sgr A*: the stars and dusty clouds on their measured orbits round the black hole, moving with the clock, the magnetar, and the black hole's shadow at its true size"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showGc}
+                            disabled={!showGalaxy}
+                            onChange={(e) => setShowGc(e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: '#000', border: '2px solid #fde68a' }} />
+                        Galactic Centre close-up
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox ${showGalaxy ? '' : 'disabled'}`}
                         title="The 199 masers (bright radio spots by newborn stars) whose parallaxes trace the spiral arms (Reid et al. 2019): the measurements the arms are drawn from"
                     >
                         <input
@@ -2999,16 +3153,32 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         onOpen={() => openGalaxyCard('milky_way')}
                     />
                 )}
+                {gcShown && !(selectedGalaxy && galaxyCards) && (
+                    <GalacticCentreLegend showOrbits={linesOn('gcOrbits')} onOpen={() => openGalaxyCard('centre')} />
+                )}
             </div>
             {selectedGalaxy && galaxyCards && (
                 <GalaxyInfoCard
                     id={selectedGalaxy}
                     cards={galaxyCards}
+                    gc={gcData}
                     onSelect={openGalaxyCard}
                     onSelectMaser={selectMaser}
+                    onSelectGc={(index) => viewGc(index)}
+                    onCloseUp={() => viewGc(null)}
                     onView={() => viewGalaxy(selectedGalaxy)}
                     onClose={() => setSelectedGalaxy(null)}
                     trueColors={trueColors}
+                />
+            )}
+            {gcObject && (
+                <GcObjectInfoCard
+                    obj={gcObject}
+                    data={gcData}
+                    time={clockView.time}
+                    onView={() => viewGc(selectedGc)}
+                    onCentre={() => openGalaxyCard('centre')}
+                    onClose={() => setSelectedGc(null)}
                 />
             )}
             {maser && (
