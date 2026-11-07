@@ -557,14 +557,20 @@ export function ClusterInfoCard({ info, text, onView, onClose }) {
         ['Distance', <>{ly(info.distance)} ly <span className="star-info-muted">likely {ly(info.distanceRange[0])}–{ly(info.distanceRange[1])} ly</span></>],
         info.age && ['Age', <>about {myr(info.age)} years
             {info.ageRange && <span className="star-info-muted"> · likely {myr(info.ageRange[0])}–{myr(info.ageRange[1])}</span>}</>],
-        ['Stars', <>{fmt(info.members)} found by Gaia
-            {info.r50 && <div className="star-info-muted">half of them within {ly(info.r50)} ly of the middle{info.rt ? `, held out to about ${ly(info.rt)} ly` : ''}</div>}</>],
+        info.source === 'hst'
+            ? ['Stars', <>{fmt(info.members)} members found by their motions (Hubble)
+                {info.r50 && <div className="star-info-muted">half its light within {size(info.r50)} ly of the middle</div>}</>]
+            : ['Stars', <>{fmt(info.members)} found by Gaia
+                {info.r50 && <div className="star-info-muted">half of them within {ly(info.r50)} ly of the middle{info.rt ? `, held out to about ${ly(info.rt)} ly` : ''}</div>}</>],
         info.av !== null && ['Dust in front', `${info.av.toFixed(1)} mag (dims it ${Math.round((1 - 10 ** (-0.4 * info.av)) * 100)}% to the eye)`],
         ['In our sky', info.constellation],
-        info.starCount > 0 && ['Stars drawn', <>{fmt(info.starCount)} measured by Gaia, besides any already among the catalogue&apos;s stars
-            <div className="star-info-muted">
-                each at its own measured distance where that&apos;s precise enough (nearby clusters keep their real shape); else at the cluster&apos;s, with a depth drawn from its size
-            </div></>],
+        info.starCount > 0 && (info.source === 'hst'
+            ? ['Stars drawn', <>{fmt(info.starCount)}, measured by Hubble
+                <div className="star-info-muted">{text.hst_notes?.join('. ')}</div></>]
+            : ['Stars drawn', <>{fmt(info.starCount)} measured by Gaia, besides any already among the catalogue&apos;s stars
+                <div className="star-info-muted">
+                    each at its own measured distance where that&apos;s precise enough (nearby clusters keep their real shape); else at the cluster&apos;s, with a depth drawn from its size
+                </div></>]),
     ];
     return (
         <div className="star-info region-info">
@@ -578,8 +584,8 @@ export function ClusterInfoCard({ info, text, onView, onClose }) {
             {info.note && <p className="star-info-origin">{info.note}</p>}
             {info.about && <p className="star-info-origin">{info.about}</p>}
             <Facts rows={rows} />
-            <p className="star-info-muted star-info-origin">{text.about}</p>
-            <Sources refs={[...text.refs, ...(info.refs ?? []), info.starCount > 0 && info.starsRef, info.noteRef]} />
+            <p className="star-info-muted star-info-origin">{info.source === 'hst' && text.hst_about ? `${text.hst_about}. ` : ''}{text.about}</p>
+            <Sources refs={[...(info.source === 'hst' ? [] : text.refs), ...(info.refs ?? []), info.starCount > 0 && info.source !== 'hst' && info.starsRef, info.noteRef]} />
         </div>
     );
 }

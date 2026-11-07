@@ -17,7 +17,7 @@ import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { DUST_MAG_PER_TAU, createDustMap, dustMapSource } from '../utils/dustMap';
 import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars, dwarfFloor } from '../utils/landmarks3d';
-import { GC_GLARE_SHARE, buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
+import { GC_GLARE_SHARE, GC_STAR_GLOW_MAX, GC_STAR_MAX_PX, buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -1017,7 +1017,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // of them, or one is opened
         const clusters = {};       // kind -> buildClusters
         const clusterData = {};    // kind -> landmarks.json[kind]
-        const clusterStars = {};   // kind -> star Points, once loaded (dwarf galaxies: a Group of one per galaxy)
+        const clusterStars = {};   // kind -> star Points, once loaded (dwarf galaxies: a Group of one per galaxy; open clusters: of Gaia's and the Galactic Centre's)
         const clusterStarPoints = () => Object.values(clusterStars).flatMap(o => (o.isGroup ? o.children : [o]));
         const clusterStarsRequested = new Set();
         // The Galactic Centre close-up (utils/galacticCentre3d): its stars
@@ -1054,8 +1054,26 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         }
                         clusterStars[kind] = group;
                     } else {
-                        clusterStars[kind] = makeStarPoints(b.positions, b.colors, b.absMags, pixelRatio, starCameraUniforms);
-                        clusterStars[kind].material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                        // The Galactic Centre's young massive clusters (HST
+                        // members, at the end of the open clusters' file): their
+                        // own Points with the close-up's sprite caps and glare
+                        // share (hundreds of stars of M_V -2 to -9 made white balls)
+                        const hst = g.stars.clusters.filter(c => c.source === 'hst');
+                        const split = hst.length ? Math.min(...hst.map(c => c.start)) : b.count;
+                        const part = (from, to) => makeStarPoints(b.positions.slice(3 * from, 3 * to), b.colors.slice(3 * from, 3 * to),
+                            b.absMags.slice(from, to), pixelRatio, starCameraUniforms);
+                        const gaia = part(0, split);
+                        gaia.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                        if (split < b.count) {
+                            const young = part(split, b.count);
+                            young.material.uniforms.uMaxSize.value = GC_STAR_MAX_PX;
+                            young.material.uniforms.uGlowMax = { value: GC_STAR_GLOW_MAX };
+                            young.userData.glareShare = GC_GLARE_SHARE;
+                            clusterStars[kind] = new THREE.Group();
+                            clusterStars[kind].add(gaia, young);
+                        } else {
+                            clusterStars[kind] = gaia;
+                        }
                     }
                     scene.add(clusterStars[kind]);
                     applyBloom();
@@ -1180,7 +1198,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             glarePass.enabled = !lite;
             const peak = lite ? 0 : GLARE_PEAK;
             starObjects().forEach(obj => {
-                obj.material.uniforms.uGlare.value = peak;
+                obj.material.uniforms.uGlare.value = peak * (obj.userData.glareShare ?? 1);
                 obj.material.uniforms.uGlareMag.value = GLARE_MAG;
             });
             // The Galactic Centre close-up's crowd of very bright stars: less glare

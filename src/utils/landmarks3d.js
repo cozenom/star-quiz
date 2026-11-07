@@ -184,7 +184,7 @@ function commonInfo(kind, g, i) {
 // (ly: half-light / half-member / the model's), and per kind: globulars:
 // distanceErr, rGc, mass (Suns), rh, rt, vmag, resolved (share of its
 // light in its Gaia stars); open clusters: distanceRange, age, ageRange
-// (million years), members, r50, rt, av; nebulae: distanceErr, type,
+// (million years), members, r50, rt, av, source, refs; nebulae: distanceErr, type,
 // about, models [{name, ref, unknown, ...}], refs; dwarf galaxies:
 // distanceErr, mass (Suns), rh, vmag, refs}
 export function clusterInfo(kind, g, i) {
@@ -236,6 +236,10 @@ export function clusterInfo(kind, g, i) {
         r50: g.r50_ly[i],
         rt: g.rt_ly[i],
         av: g.av[i],
+        // Where its members come from: null Gaia (Hunt & Reffert), 'hst'
+        // (the Galactic Centre's clusters, Hosek et al. 2022); its own refs
+        source: g.source?.[i] ?? null,
+        refs: g.cluster_refs?.[i] ?? null,
         radius: g.r50_ly[i],
         label: `${g.name[i]} · open cluster, ${fmt(g.distance_ly[i])} ly`,
     };

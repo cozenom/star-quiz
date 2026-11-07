@@ -94,8 +94,8 @@ const KEPLER_ITERATIONS = 30;
 // this share of the glare spike. Up close nearly all of them are brighter
 // than the cap's magnitude (+1.1), so they draw the same size: their order
 // of brightness doesn't show (the 24 px cap had the same problem).
-const GC_STAR_MAX_PX = 9;
-const GC_STAR_GLOW_MAX = 0.25;
+export const GC_STAR_MAX_PX = 9;
+export const GC_STAR_GLOW_MAX = 0.25;
 export const GC_GLARE_SHARE = 0.03;
 
 // Eccentric anomaly for mean anomaly m (radians, any value)
