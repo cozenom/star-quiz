@@ -67,6 +67,13 @@ const NEAR_FRACTION = 0.3;
 const VIEW_SCALE = 2.2;
 const VIEW_MIN_AU = 300;
 const CLOSE_UP_VIEW_AU = 6000;
+// The cluster's giants: one by one while the camera is among them, fading
+// (up to this many magnitudes dimmer) as it pulls back from this many times
+// their sphere's radius to the second, where the nucleus's glow and points
+// stand for the cluster (ours: 8,000 at their true brightness pile into a
+// white ball from outside)
+const GIANTS_FADE_R = [1.5, 5];
+const GIANTS_FADE_MAG = 6;
 // The circumnuclear disc's view (search): this far from Sgr A* (ly), this
 // far above its plane (deg), on Earth's side. Its dust shows best nearly
 // edge on (from Earth's side, 60 deg from face on, a sight line through it
@@ -283,15 +290,25 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
         starColors.set(bvToColor(objects[i].b_v), 3 * k);
         starMags[k] = objects[i].abs_mag;
     });
-    const starPoints = makeStars(starPositions, starColors, starMags);
-    starPoints.material.uniforms.uUnitsPerPc.value = AU_PER_PC;
-    // Smaller sprites than other stars', with less halo (see GC_STAR_MAX_PX)
-    starPoints.material.uniforms.uMaxSize.value = GC_STAR_MAX_PX;
-    starPoints.material.uniforms.uGlowMax = { value: GC_STAR_GLOW_MAX };
-    // No dim floor: behind the circumnuclear disc's dust a star is gone
-    starPoints.material.uniforms.uMinAlpha.value = 0;
-    starPoints.frustumCulled = false;
-    layer.scene.add(starPoints);
+    // Smaller sprites than other stars', with less halo (see
+    // GC_STAR_MAX_PX); no dim floor: behind the circumnuclear disc's dust a
+    // star is gone
+    const closeUpStars = (positions, colors, mags) => {
+        const points = makeStars(positions, colors, mags);
+        points.material.uniforms.uUnitsPerPc.value = AU_PER_PC;
+        points.material.uniforms.uMaxSize.value = GC_STAR_MAX_PX;
+        points.material.uniforms.uGlowMax = { value: GC_STAR_GLOW_MAX };
+        points.material.uniforms.uMinAlpha.value = 0;
+        points.material.uniforms.uMagOffset = { value: 0 };
+        points.frustumCulled = false;
+        layer.scene.add(points);
+        return points;
+    };
+    const starPoints = closeUpStars(starPositions, starColors, starMags);
+    // The nuclear star cluster's bright giants (galactic_centre.json
+    // cluster_stars), once their file is in (addClusterStars)
+    let clusterPoints = null;
+    const clusterAu = data.cluster_stars ? data.cluster_stars.radius_pc * AU_PER_PC : 0;
 
     // Orbit lines: in the orbit's plane (x towards periapsis), turned into
     // place by the object's matrix as the orbit precesses
@@ -430,6 +447,11 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
                 line.material.opacity = (selected ? ORBIT_SELECTED_OPACITY : ORBIT_OPACITY) * fade * (listed || selected ? 1 : 0) * Math.max(shown[i], selected ? 1 : 0);
                 line.visible = line.material.opacity > 0.003;
             });
+            if (clusterPoints) {
+                const r = dist / clusterAu;
+                clusterPoints.material.uniforms.uMagOffset.value = GIANTS_FADE_MAG * THREE.MathUtils.smoothstep(r, ...GIANTS_FADE_R);
+                clusterPoints.visible = r < GIANTS_FADE_R[1];
+            }
             cloudMaterial.uniforms.uFocalPx.value = focal * pixelRatio;
             cloudMaterial.uniforms.uFade.value = inner;
             markerMaterial.uniforms.uFade.value = inner;
@@ -437,7 +459,8 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
             let nearest = dist - data.black_hole.shadow_au;
             for (const p of now) nearest = Math.min(nearest, p.distanceTo(cameraAu));
             layer.near = Math.max(nearest * NEAR_FRACTION, 1e-4);
-            layer.far = dist + 2e5;
+            // Far plane: past the cluster's stars behind Sgr A*
+            layer.far = dist + Math.max(2e5, 1.05 * clusterAu);
         },
 
         // Where object i is now, in ly from the Sun (doubles); out: Vector3
@@ -475,9 +498,31 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
             setStarCamera(starCamera, layer.camera.position);
         },
 
+        // The cluster's giants (gc_cluster_stars.bin: int16 x, y, z per star,
+        // scene frame, unit_au; then a uint8 V absolute magnitude code each),
+        // still: they take ~10,000+ years to go round
+        addClusterStars(buffer) {
+            const c = data.cluster_stars;
+            if (clusterPoints || !c) return;
+            const local = new Int16Array(buffer, 0, c.count * 3);
+            const codes = new Uint8Array(buffer, c.count * 6, c.count);
+            const positions = new Float32Array(c.count * 3);
+            for (let i = 0; i < positions.length; i++) positions[i] = local[i] * c.unit_au;
+            const colors = new Float32Array(c.count * 3);
+            const tint = bvToColor(c.b_v);
+            for (let i = 0; i < c.count; i++) colors.set(tint, 3 * i);
+            const mags = new Float32Array(c.count);
+            for (let i = 0; i < c.count; i++) mags[i] = c.mag.min + codes[i] * c.mag.step;
+            clusterPoints = closeUpStars(positions, colors, mags);
+        },
+        // The star materials, for the glare (Universe3D applyBloom)
+        starMaterials: () => [starPoints.material, ...(clusterPoints ? [clusterPoints.material] : [])],
+
         dispose() {
             starPoints.geometry.dispose();
             starPoints.material.dispose();
+            clusterPoints?.geometry.dispose();
+            clusterPoints?.material.dispose();
             orbitLines.forEach(line => {
                 if (!line) return;
                 line.geometry.dispose();

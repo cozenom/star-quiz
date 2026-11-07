@@ -198,6 +198,7 @@ function MilkyWay({ card, actions, trueColors }) {
 function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
     const shadow = gc?.black_hole;
     const cnd = gc?.cnd;
+    const giants = gc?.cluster_stars;
     return (
         <>
             <h3 className="star-info-title">Galactic Centre</h3>
@@ -220,7 +221,7 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
             ]} />
             {gc && <GcObjects gc={gc} onSelectGc={onSelectGc} />}
             <Objects objects={card.objects} onSelectMaser={onSelectMaser} />
-            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), ...(cnd?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
+            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), ...(giants?.refs ?? []), ...(cnd?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
         </>
     );
 }
@@ -240,6 +241,9 @@ function GcObjects({ gc, onSelectGc }) {
                 distance from the Sun, every few years to decades.
                 {young > 0 && ` Further out, ${young} young massive stars, on orbits of thousands of years worked out from how they move
                 (most of their distances along our line of sight drawn).`}
+                {gc.cluster_stars && ` Round them, ${gc.cluster_stars.count.toLocaleString()} of the cluster's brightest red giants, out to
+                ${Math.round(gc.cluster_stars.radius_pc * LY_PER_PARSEC)} ly: where each is on the sky and how bright measured by the
+                GALACTICNUCLEUS survey, how far along our line of sight drawn from the cluster's shape.`}
             </p>
             <ul className="region-members">
                 {shown.map(({ obj, i }) => (
@@ -361,6 +365,7 @@ export function GalacticCentreLegend({ showOrbits, onOpen }) {
         showOrbits && { key: 'cloud-orbits', swatch: <span className="galaxy-legend-line" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects\' orbits' },
         { key: 'magnetar', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_MAGNETAR_COLOR) }} />, name: 'Magnetar' },
         { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: 'Sgr A*\'s shadow (true size)' },
+        { key: 'giants', swatch: <span className="universe-3d-swatch" style={{ background: '#ffc38a', boxShadow: '0 0 3px #ffc38a' }} />, name: "The cluster's brightest red giants, out to ~30 ly (measured on the sky; depths drawn)" },
         { key: 'cluster', swatch: <span className="universe-3d-swatch" style={{ background: hex(NUCLEUS_COLOR) }} />, name: 'The star cluster round it (toned down)' },
         { key: 'cnd', swatch: <span className="universe-3d-swatch" style={{ background: '#140c08', border: '1px solid #64748b' }} />, name: "Dark lanes: the circumnuclear disc's dust" },
     ].filter(Boolean);

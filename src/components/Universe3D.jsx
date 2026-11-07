@@ -232,17 +232,20 @@ const starVertexShader = `
 `;
 
 // The Galactic Centre close-up's stars (AU): dimmed by the circumnuclear
-// disc's dust between the camera and each (utils/circumnuclearDisc)
+// disc's dust between the camera and each (utils/circumnuclearDisc), and
+// by uMagOffset (each material's own: the cluster's giants fade with
+// distance, galacticCentre3d)
 const gcStarVertexShader = `
     attribute float absMag;
     attribute vec3 color;
     uniform int uCndSteps;
+    uniform float uMagOffset;
     ${CND_GLSL}
     ${STAR_VERTEX_GLSL}
 
     void main() {
         float aV = cndTauTo(cndFrame(position), uCndSteps, 0.5) * ${DUST_MAG_PER_TAU.toFixed(6)};
-        placeStar(position, color, absMag + aV);
+        placeStar(position, color, absMag + aV + uMagOffset);
     }
 `;
 
@@ -1096,6 +1099,21 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 });
                 s.gc = gc;
                 applyBloom();
+                // The nuclear star cluster's bright giants (small: with the data)
+                const file = data.gc.cluster_stars?.file;
+                if (file) {
+                    fetch(`${import.meta.env.BASE_URL}data/${file}`)
+                        .then((response) => {
+                            if (!response.ok) throw new Error(`Failed to load ${file}: ${response.statusText}`);
+                            return response.arrayBuffer();
+                        })
+                        .then((buffer) => {
+                            if (disposed) return;
+                            gc.addClusterStars(buffer);
+                            applyBloom();
+                        })
+                        .catch(error => console.error('Error loading the cluster\'s stars:', error));
+                }
             }
         }).catch(error => console.error('Error loading the galaxy model:', error));
 
@@ -1166,7 +1184,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 obj.material.uniforms.uGlareMag.value = GLARE_MAG;
             });
             // The Galactic Centre close-up's crowd of very bright stars: less glare
-            if (gc) gc.starPoints.material.uniforms.uGlare.value = peak * GC_GLARE_SHARE;
+            if (gc) gc.starMaterials().forEach((m) => { m.uniforms.uGlare.value = peak * GC_GLARE_SHARE; });
             solar?.setGlare(peak, GLARE_MAG);
         };
         applyBloom();
