@@ -198,6 +198,7 @@ function MilkyWay({ card, actions, trueColors }) {
 function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
     const shadow = gc?.black_hole;
     const cnd = gc?.cnd;
+    const cmz = gc?.cmz;
     const giants = gc?.cluster_stars;
     return (
         <>
@@ -218,10 +219,13 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
                     gas. {cnd.about}
                     <div className="star-info-muted">{cnd.drawn} {Math.round(cnd.kept_share * 100)}% of the gas there moves with the
                     disc; the rest (falling in, or in the big clouds round the centre) is left out. {cnd.mass_note}.</div></>],
+                cmz && ['Central Molecular Zone', <>{cmz.about}
+                    <div className="star-info-muted">{cmz.drawn} {Math.round(cmz.cloud_share * 100)}% of its dust is in the {cmz.clouds.length} catalogued
+                    clouds; their distances are uncertain by about a third (to be read, the authors say, as a guide). {cmz.notes[2]}.</div></>],
             ]} />
             {gc && <GcObjects gc={gc} onSelectGc={onSelectGc} />}
             <Objects objects={card.objects} onSelectMaser={onSelectMaser} />
-            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), ...(giants?.refs ?? []), ...(cnd?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
+            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), ...(giants?.refs ?? []), ...(cnd?.refs ?? []), ...(cmz?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
         </>
     );
 }

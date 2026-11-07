@@ -26,8 +26,9 @@
 // Both are dimmed by the dust between the camera and them (the glow's to
 // each ray's closest approach to Sgr A*, each point's to itself: the band's
 // dust, the model's and the measured map), and by the circumnuclear disc's
-// (utils/circumnuclearDisc: the glow's each sample by the disc in front of
-// it, each point's to itself), worked out here: the dust volume
+// and the Central Molecular Zone's (utils/localDust: the glow's each
+// sample by the dust in front of it, each point's to itself), worked out
+// here: the dust volume
 // dims everything drawn before it by a ray's whole column, which from
 // inside the nucleus would put the dust behind it in front. So they draw
 // after the volume.
@@ -37,7 +38,7 @@
 // are published (see milkyWayBand).
 
 import * as THREE from 'three';
-import { CND_GLSL, CND_RAY_GLSL, CND_STEPS, createCnd } from './circumnuclearDisc.js';
+import { CMZ_GLSL, CMZ_RAY_GLSL, CMZ_STEPS, CND_GLSL, CND_RAY_GLSL, CND_STEPS, createCmz, createCnd } from './localDust.js';
 import { DUST_MAG_PER_TAU } from './dustMap.js';
 import { GALAXY_COLORS, sceneMatrix } from './galaxy3d.js';
 import { BAND_GLSL, NUCLEUS_REACH_KPC, bandUniforms } from './milkyWayBand.js';
@@ -125,10 +126,13 @@ const fragmentShader = /* glsl */ `
     uniform int uDustSteps;
     uniform vec4 uDisplay;     // log10 light at none and full, full brightness, gamma
     uniform int uCndGlowSteps;
+    uniform int uCmzGlowSteps;
     varying vec3 vLocal;
     ${CND_GLSL}
     ${CND_RAY_GLSL}
-    #define NUCLEUS_ATTENUATION(t) cndTransmission(t)
+    ${CMZ_GLSL}
+    ${CMZ_RAY_GLSL}
+    #define NUCLEUS_ATTENUATION(t) (cndTransmission(t) * cmzTransmission(t))
     ${BAND_GLSL}
     ${DUST_IN_FRONT_GLSL}
     float brightness(float light) {
@@ -147,6 +151,7 @@ const fragmentShader = /* glsl */ `
         float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
         // The circumnuclear disc in front of each sample
         cndPrepare(dir, t0, t1, uCndGlowSteps, jitter);
+        cmzPrepare(dir, t0, t1, uCmzGlowSteps, jitter);
         float light = nucleusLight(uCamGc, dir, t0, t1, uNucleusSteps);
         if (light < pow(10.0, uDisplay.x)) discard;
         // The dust in front: from the camera to the closest approach
@@ -171,11 +176,13 @@ const pointVertexShader = /* glsl */ `
     uniform float uPixelRatio;
     uniform int uPointDustSteps;
     uniform int uCndPointSteps;
+    uniform int uCmzPointSteps;
     uniform vec3 uPointColor;
     varying vec3 vColor;
     ${BAND_GLSL}
     ${DUST_IN_FRONT_GLSL}
     ${CND_GLSL}
+    ${CMZ_GLSL}
     void main() {
         vec3 toPoint = position - uCamGc;
         float d = length(toPoint);
@@ -188,7 +195,8 @@ const pointVertexShader = /* glsl */ `
             return;
         }
         float tauV = dustInFront(uCamGc, toPoint / max(d, 1e-12), d, uPointDustSteps, 0.5)
-            + cndTauTo(cndFrame(position), uCndPointSteps, 0.5);
+            + cndTauTo(cndFrame(position), uCndPointSteps, 0.5)
+            + cmzTauTo(cmzFrame(position), uCmzPointSteps, fract(sin(dot(position.xy, vec2(12.9898, 78.233)) * 1e4) * 43758.5453));
         vColor = uPointColor * bright * shown * exp(-tauV * uDustColor);
         gl_PointSize = size * uPixelRatio;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -265,11 +273,11 @@ function scatterPoints(data, lite) {
 }
 
 // scene: the star layer's scene; data: galaxy.json; dust: the measured dust
-// (utils/dustMap createDustMap); cnd: the circumnuclear disc's
-// (utils/circumnuclearDisc createCnd); pixelRatio: the device's. The points
+// (utils/dustMap createDustMap); cnd, cmz: the circumnuclear disc's and
+// the Central Molecular Zone's (utils/localDust); pixelRatio: the device's. The points
 // are scattered here (fixed seed). Returns {update(cameraLy), setFade(f),
 // dispose()}
-export function buildNucleus(scene, data, { lite = false, dust, cnd = createCnd(), pixelRatio = 1 }) {
+export function buildNucleus(scene, data, { lite = false, dust, cnd = createCnd(), cmz = createCmz(), pixelRatio = 1 }) {
     const toScene = sceneMatrix(data.to_scene);
     const fromScene = toScene.clone().invert();
     const uniforms = {
@@ -278,6 +286,9 @@ export function buildNucleus(scene, data, { lite = false, dust, cnd = createCnd(
         ...cnd.uniforms('galactocentric'),
         uCndGlowSteps: { value: CND_STEPS[lite ? 'lite' : 'full'].glow },
         uCndPointSteps: { value: CND_STEPS[lite ? 'lite' : 'full'].points },
+        ...cmz.uniforms('galactocentric'),
+        uCmzGlowSteps: { value: CMZ_STEPS[lite ? 'lite' : 'full'].glow },
+        uCmzPointSteps: { value: CMZ_STEPS[lite ? 'lite' : 'full'].points },
         uNucleusSteps: { value: new THREE.Vector2(...STEPS[lite ? 'lite' : 'full']) },
         uCamGc: { value: new THREE.Vector3() },
         uBoxHalf: { value: new THREE.Vector3(...BOX_HALF_KPC) },

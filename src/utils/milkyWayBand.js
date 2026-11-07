@@ -22,7 +22,10 @@
 //     and Taurus clouds), sampled in finer steps (DUST_SUB per step); the
 //     model's dust for the rest (1 - measuredShare): the Drimmel & Spergel
 //     disc (flaring, hole inside R0 / 2) plus lanes on the arms' inner
-//     edges, the same offset as the 3D sprites
+//     edges, the same offset as the 3D sprites; and the Central Molecular
+//     Zone's round the centre (utils/localDust: Herschel's dust column at
+//     each cloud's measured distance), marched along each ray through its
+//     own box (not in band_reference.py's score: it covers ~3 x 0.8 deg)
 // Seen from anywhere: the band tilts and thickens as the camera moves, and
 // becomes the disc on the way out.
 // What's ours: the brightness of each part (amplitudes, apart from the thick
@@ -39,8 +42,9 @@
 // belief (bulge x50, bar x95), so they stay. What's left is mostly in the
 // plane, where the model is too dim towards the inner Galaxy. The nucleus
 // (2026-11-05) left the score as it was: from the Sun the model's dust to
-// Sgr A* is tau ~7 (the real A_V ~30, most of it in the Central Molecular
-// Zone, not modelled yet), so it is a speck under 0.05 deg.
+// Sgr A* is tau ~7 (the real A_V ~30, much of it in the Central Molecular
+// Zone, added since: its clouds hide much of the nucleus from here), so it
+// was a speck under 0.05 deg.
 //
 // The march runs into a cube map round the camera, re-rendered only when
 // the camera has moved enough to change the view (turning is free), and
@@ -52,6 +56,7 @@ import {
     DUST_OFFSET, DUST_SPREAD, armPoint, prepareArms, sceneMatrix,
 } from './galaxy3d.js';
 import { DUST_GLSL, DUST_MAG_PER_TAU, createDustMap } from './dustMap.js';
+import { CMZ_GLSL, CMZ_RAY_GLSL, CMZ_STEPS, createCmz } from './localDust.js';
 
 // Face-on arm texture: +-ARMS_HALF_KPC, ARMS_SIZE px a side (~80 pc a pixel)
 const ARMS_HALF_KPC = 20;
@@ -165,7 +170,7 @@ export const BAND_GLSL = /* glsl */ `
     // dense where the profile is steep, a few per factor of distance beyond.
     // Each sample times NUCLEUS_ATTENUATION(t), the light let through from
     // there (1 unless the shader defines it: the circumnuclear disc's dust,
-    // utils/circumnuclearDisc CND_RAY_GLSL)
+    // utils/localDust CND_RAY_GLSL)
     #ifndef NUCLEUS_ATTENUATION
     #define NUCLEUS_ATTENUATION(t) 1.0
     #endif
@@ -223,6 +228,10 @@ export const BAND_GLSL = /* glsl */ `
         // Where the ray passes Sgr A*, and the dust in front of that point
         float tc = -dot(origin, dir);
         vec3 tauNucleus = vec3(0.0);
+        #ifdef BAND_CMZ
+        // The Central Molecular Zone's dust along the ray, in its own steps
+        cmzPrepare(dir, t0, t1, uCmzRaySteps, 0.5);
+        #endif
         for (int i = 1; i <= 160; i++) {
             if (i > uSteps) break;
             float t = t0 * pow(ratio, float(i) / float(uSteps));
@@ -261,6 +270,9 @@ export const BAND_GLSL = /* glsl */ `
             float modelShare = 1.0 - measuredShare(0.5 * (ha + hb));
             vec3 emit = uColDisc * disc + uColBulge * bulge + uColArms * young;
             vec3 dtau = uDustColor * (modelDust(p, arm.g) * ds * modelShare + measured);
+            #ifdef BAND_CMZ
+            dtau += uDustColor * (cmzTauAt(t) - cmzTauAt(tStart));
+            #endif
             // Light from this step, dimmed by the dust in front of it and
             // (half) by its own
             light += emit * ds * exp(-tau - 0.5 * dtau);
@@ -416,7 +428,11 @@ const marchFragmentShader = /* glsl */ `
     uniform mat3 uToGc;     // scene direction -> Galactocentric direction
     uniform float uCurve[${CURVE.y.length}];
     uniform vec2 uCurveRange;  // log10(light) at the first and last knot
+    uniform int uCmzRaySteps;
     varying vec3 vDir;
+    ${CMZ_GLSL}
+    ${CMZ_RAY_GLSL}
+    #define BAND_CMZ
     ${BAND_GLSL}
     float curve(float light) {
         float x = clamp((log(max(light, 1e-30)) * 0.4342945 - uCurveRange.x) / (uCurveRange.y - uCurveRange.x), 0.0, 1.0)
@@ -443,10 +459,11 @@ const skyFragmentShader = /* glsl */ `
 `;
 
 // scene: the sky layer's scene (a layer whose origin is the camera); dust:
-// the measured dust (utils/dustMap createDustMap; none: the model's only).
-// Returns update(cameraPositionLy) (re-renders the cube when needed),
-// fade(), setVisible(on), dispose()
-export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = null } = {}) {
+// the measured dust (utils/dustMap createDustMap; none: the model's only);
+// cmz: the Central Molecular Zone's (utils/localDust). Returns
+// update(cameraPositionLy) (re-renders the cube when needed), fade(),
+// setVisible(on), dispose()
+export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = null, cmz = createCmz() } = {}) {
     const dustMap = dust ?? createDustMap(null);
     const toScene = sceneMatrix(data.to_scene);           // kpc -> ly
     const fromScene = toScene.clone().invert();           // ly -> kpc
@@ -457,6 +474,8 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = 
     const uniforms = {
         ...bandUniforms(data, lite),
         ...dustMap.uniforms,
+        ...cmz.uniforms('galactocentric'),
+        uCmzRaySteps: { value: CMZ_STEPS[lite ? 'lite' : 'full'].glow },
         uCam: { value: new THREE.Vector3() },
         uToGc: { value: toGc },
     };
@@ -492,6 +511,7 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = 
     const lastKpc = new THREE.Vector3(Infinity, 0, 0);
     // New dust boxes, or the dust switched: draw again
     const stopListening = dustMap.onChange(() => lastKpc.set(Infinity, 0, 0));
+    const stopListeningCmz = cmz.onChange(() => lastKpc.set(Infinity, 0, 0));
     let wanted = true;
     let fade = 0;
     return {
@@ -513,6 +533,7 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = 
         setVisible: (on) => { wanted = on; },
         dispose: () => {
             stopListening();
+            stopListeningCmz();
             if (!dust) dustMap.dispose();
             scene.remove(sky);
             sphereGeometry.dispose();
@@ -552,8 +573,10 @@ const dustVolumeFragmentShader = /* glsl */ `
     uniform int uMaxSteps;
     uniform float uStepKpc;
     uniform float uNearKpc;
+    uniform int uCmzRaySteps;
     varying vec3 vLocal;
     ${BAND_GLSL}
+    ${CMZ_GLSL}
     void main() {
         vec3 dir = normalize(vLocal - uCamGc);
         vec3 inv = 1.0 / (dir + vec3(1e-9));
@@ -577,6 +600,8 @@ const dustVolumeFragmentShader = /* glsl */ `
             tauV += modelDust(p, armTexel(p).g) * ds * (1.0 - measuredShare(h))
                 + measuredDust(h) * ds * 1000.0 / ${DUST_MAG_PER_TAU.toFixed(6)};
         }
+        // The Central Molecular Zone's, in its own steps
+        tauV += cmzTauRay(dir, t0, t1, uCmzRaySteps, jitter);
         vec3 lost = (1.0 - exp(-tauV * uDustColor)) * uFade;
         if (max(lost.r, max(lost.g, lost.b)) < 0.002) discard;
         gl_FragColor = vec4(lost, 1.0);
@@ -584,9 +609,9 @@ const dustVolumeFragmentShader = /* glsl */ `
 `;
 
 // scene: the star layer's scene; dust: the measured dust (createDustMap);
-// background: the renderer's clear colour. Returns {update(cameraLy),
-// setFade(f), dispose()}
-export function buildGalaxyDust(scene, data, { lite = false, dust = null, background = new THREE.Color(0, 0, 0) } = {}) {
+// cmz: the Central Molecular Zone's (utils/localDust); background: the
+// renderer's clear colour. Returns {update(cameraLy), setFade(f), dispose()}
+export function buildGalaxyDust(scene, data, { lite = false, dust = null, cmz = createCmz(), background = new THREE.Color(0, 0, 0) } = {}) {
     const dustMap = dust ?? createDustMap(null);
     const toScene = sceneMatrix(data.to_scene);
     const fromScene = toScene.clone().invert();
@@ -599,6 +624,8 @@ export function buildGalaxyDust(scene, data, { lite = false, dust = null, backgr
         uMaxSteps: { value: lite ? DUST_VOLUME_STEPS.lite : DUST_VOLUME_STEPS.full },
         uStepKpc: { value: DUST_VOLUME_STEP_KPC },
         uNearKpc: { value: DUST_VOLUME_NEAR_KPC },
+        ...cmz.uniforms('galactocentric'),
+        uCmzRaySteps: { value: CMZ_STEPS[lite ? 'lite' : 'full'].glow },
     };
     const material = new THREE.ShaderMaterial({
         uniforms,

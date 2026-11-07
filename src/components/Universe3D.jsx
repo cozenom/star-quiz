@@ -12,7 +12,7 @@ import { buildSmallBodyCloud, COMET_FAMILIES, smallBodyColor } from '../utils/sm
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildNucleus } from '../utils/galacticNucleus';
-import { CND_GLSL, CND_STEPS, createCnd } from '../utils/circumnuclearDisc';
+import { CMZ_GLSL, CMZ_STEPS, CND_GLSL, CND_STEPS, createCmz, createCnd } from '../utils/localDust';
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { DUST_MAG_PER_TAU, createDustMap, dustMapSource } from '../utils/dustMap';
@@ -232,19 +232,22 @@ const starVertexShader = `
 `;
 
 // The Galactic Centre close-up's stars (AU): dimmed by the circumnuclear
-// disc's dust between the camera and each (utils/circumnuclearDisc), and
+// disc's dust between the camera and each (utils/localDust), and
 // by uMagOffset (each material's own: the cluster's giants fade with
 // distance, galacticCentre3d)
 const gcStarVertexShader = `
     attribute float absMag;
     attribute vec3 color;
     uniform int uCndSteps;
+    uniform int uCmzSteps;
     uniform float uMagOffset;
     ${CND_GLSL}
+    ${CMZ_GLSL}
     ${STAR_VERTEX_GLSL}
 
     void main() {
-        float aV = cndTauTo(cndFrame(position), uCndSteps, 0.5) * ${DUST_MAG_PER_TAU.toFixed(6)};
+        float aV = (cndTauTo(cndFrame(position), uCndSteps, 0.5) + cmzTauTo(cmzFrame(position), uCmzSteps, 0.5))
+            * ${DUST_MAG_PER_TAU.toFixed(6)};
         placeStar(position, color, absMag + aV + uMagOffset);
     }
 `;
@@ -1007,10 +1010,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // points at every scale over a faint glow, after the dust volume
         // (their own dust in front)
         let nucleus = null;
-        // The circumnuclear disc's dust (utils/circumnuclearDisc): dims the
+        // The circumnuclear disc's dust (utils/localDust): dims the
         // nucleus, the close-up's stars and the minispiral behind it; its
         // grid fetched with the close-up's data
         const cnd = createCnd();
+        // The Central Molecular Zone's dust (utils/localDust): dims the band,
+        // the galaxy's dust volume, the nucleus and the close-up's stars
+        // behind its clouds; its grid fetched with the close-up's data
+        const cmz = createCmz();
         // The landmarks (landmarks.json): star clusters and nebulae, each
         // kind real, shown from closer in than the model; a kind's Gaia stars
         // (several MB), or the nebulae's models, once the camera is near one
@@ -1086,29 +1093,36 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         loadGalaxyData().then((data) => {
             if (disposed) return;
             dust.setGalaxyFrame(data.to_scene);
-            band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite, dust });
-            galaxyDust = buildGalaxyDust(scene, data, { lite, dust, background: renderer.getClearColor(new THREE.Color()) });
-            nucleus = buildNucleus(scene, data, { lite, dust, cnd, pixelRatio });
+            band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite, dust, cmz });
+            galaxyDust = buildGalaxyDust(scene, data, { lite, dust, cmz, background: renderer.getClearColor(new THREE.Color()) });
+            nucleus = buildNucleus(scene, data, { lite, dust, cnd, cmz, pixelRatio });
             for (const kind of LANDMARK_KINDS) {
                 if (!data.landmarks?.[kind]) continue;
                 clusterData[kind] = data.landmarks[kind];
                 clusters[kind] = buildClusters(scene, kind, clusterData[kind], pixelRatio, { cnd, lite });
             }
-            if (data.gc?.cnd) {
-                fetch(`${import.meta.env.BASE_URL}data/${data.gc.cnd.file}`)
+            // The local dust grids (the circumnuclear disc's, the CMZ's)
+            for (const [grid, meta] of [[cnd, data.gc?.cnd], [cmz, data.gc?.cmz]]) {
+                if (!meta) continue;
+                fetch(`${import.meta.env.BASE_URL}data/${meta.file}`)
                     .then((response) => {
-                        if (!response.ok) throw new Error(`Failed to load ${data.gc.cnd.file}: ${response.statusText}`);
+                        if (!response.ok) throw new Error(`Failed to load ${meta.file}: ${response.statusText}`);
                         return response.arrayBuffer();
                     })
                     .then((buffer) => {
-                        if (!disposed) cnd.load(data.gc.cnd, buffer, data.gc.origin_ly, data.to_scene);
+                        if (!disposed) grid.load(meta, buffer, data.gc.origin_ly, data.to_scene);
                     })
-                    .catch(error => console.error('Error loading the circumnuclear disc:', error));
+                    .catch(error => console.error(`Error loading ${meta.file}:`, error));
             }
             if (data.gc) {
                 const gcStarShader = {
                     vertexShader: gcStarVertexShader,
-                    uniforms: { ...cnd.uniforms('gc'), uCndSteps: { value: CND_STEPS[lite ? 'lite' : 'full'].points } },
+                    uniforms: {
+                        ...cnd.uniforms('gc'),
+                        uCndSteps: { value: CND_STEPS[lite ? 'lite' : 'full'].points },
+                        ...cmz.uniforms('gc'),
+                        uCmzSteps: { value: CMZ_STEPS[lite ? 'lite' : 'full'].points },
+                    },
                 };
                 gc = buildGalacticCentre(gcLayer, data.gc, pixelRatio, {
                     makeStars: (p, c, m) => makeStarPoints(p, c, m, pixelRatio, gcStarCamera, SPRITE_MAX_SIZE_PX, gcStarShader),
@@ -2177,6 +2191,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             const dustWanted = optionsRef.current.showGalaxy && optionsRef.current.showDust;
             dust.setEnabled(dustWanted);
             if (dustWanted) loadDust();
+            // The local dust's camera (before the band, which may redraw now)
+            cnd.update(camera.position);
+            cmz.update(camera.position);
             if (band) {
                 band.setVisible(optionsRef.current.showGalaxy && optionsRef.current.showBand);
                 band.update(camera.position);
@@ -2186,7 +2203,6 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             galaxyDust?.update(camera.position);
             nucleus?.setFade(galaxy.fade());
             nucleus?.update(camera.position);
-            cnd.update(camera.position);
             // The star clusters; each kind's stars loaded once near one of
             // them out of the Solar System (or one is opened)
             const clustersNow = {};
@@ -2324,6 +2340,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             galaxyDust?.dispose();
             nucleus?.dispose();
             cnd.dispose();
+            cmz.dispose();
             Object.values(clusters).forEach(c => c.dispose());
             gc?.dispose();
             dust.dispose();

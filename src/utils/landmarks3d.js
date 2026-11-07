@@ -33,7 +33,7 @@
 // tell at this scale, so each point / fragment tests its line of sight.
 
 import * as THREE from 'three';
-import { CND_GLSL, CND_STEPS } from './circumnuclearDisc.js';
+import { CND_GLSL, CND_STEPS } from './localDust.js';
 import { bvToColor } from './universe3d.js';
 
 // Old stars: yellow-white (raw hex, ours; also the legend's swatch)
@@ -494,7 +494,7 @@ function placePart(object, model, centre) {
 
 // A nebula's cloud part (nebula_<id>_<part>.bin: int16 x, y, z per point,
 // then a uint8 log flux each, then with rgb uint8 r, g, b each) -> Points;
-// occluders: its nebula's lobes; cnd: {cnd, lite} (utils/circumnuclearDisc)
+// occluders: its nebula's lobes; cnd: {cnd, lite} (utils/localDust)
 // for a part dimmed_by_cnd
 function nebulaCloud(buffer, model, centre, pixelRatio, occluders, cnd) {
     const count = model.count;
@@ -587,7 +587,7 @@ function nebulaMesh(buffer, model, centre, occluders) {
 // addModels(buffers) (nebulae: every part's file, in order),
 // nearest(cameraLy) (ly to the nearest one's centre), labels() [{index,
 // name, position (Vector3)}], info(i), pick(camera, width, height, x, y,
-// radiusPx) -> index | null, dispose()}. cnd: {cnd (utils/circumnuclearDisc
+// radiusPx) -> index | null, dispose()}. cnd: {cnd (utils/localDust
 // createCnd), lite}, for the parts dimmed by it
 export function buildClusters(scene, kind, g, pixelRatio, cnd = null) {
     const k = KIND[kind];

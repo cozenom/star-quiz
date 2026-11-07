@@ -81,6 +81,11 @@ const GIANTS_FADE_MAG = 6;
 // ~20 deg its inner rim hides the stars round Sgr A* too
 const CND_VIEW_LY = 35;
 const CND_VIEW_ELEVATION_DEG = 25;
+// The Central Molecular Zone's view (search): this far from Sgr A* (ly),
+// this far above the Galactic plane (deg), on Earth's side: its clouds
+// against the nuclear disc's glow
+const CMZ_VIEW_LY = 1800;
+const CMZ_VIEW_ELEVATION_DEG = 35;
 // How close the camera may get to Sgr A* (AU): just outside its shadow
 const MIN_DISTANCE_AU = 0.4;
 
@@ -159,19 +164,23 @@ export function gcLabel(obj) {
 
 // Camera views (ly from the Sun), as seen from Earth's side, looking at
 // Sgr A*: an object's (its whole orbit in view; the magnetar's place), the
-// close-up's (index null) or the circumnuclear disc's ('cnd').
+// close-up's (index null), the circumnuclear disc's ('cnd') or the Central
+// Molecular Zone's ('cmz').
 // {position, target, minDistance}
 export function gcPose(data, index) {
     const target = new THREE.Vector3(...data.origin_ly);
     const toEarth = new THREE.Vector3(...data.sky.away).negate();
     let au = CLOSE_UP_VIEW_AU;
     let from = toEarth;
-    if (index === 'cnd') {
-        au = CND_VIEW_LY * AU_PER_LY;
-        // Earth's direction laid in the disc's plane, then tilted up
-        const w = new THREE.Vector3(...data.cnd.axes.w);
+    if (index === 'cnd' || index === 'cmz') {
+        const [ly, deg, axes] = index === 'cnd' ? [CND_VIEW_LY, CND_VIEW_ELEVATION_DEG, data.cnd.axes]
+            : [CMZ_VIEW_LY, CMZ_VIEW_ELEVATION_DEG, data.cmz.axes];
+        au = ly * AU_PER_LY;
+        // Earth's direction laid in the disc's (the Galaxy's) plane, then
+        // tilted up
+        const w = new THREE.Vector3(...axes.w);
         const inPlane = toEarth.clone().addScaledVector(w, -toEarth.dot(w)).normalize();
-        const e = THREE.MathUtils.degToRad(CND_VIEW_ELEVATION_DEG) * Math.sign(toEarth.dot(w) || 1);
+        const e = THREE.MathUtils.degToRad(deg) * (index === 'cnd' ? Math.sign(toEarth.dot(w) || 1) : 1);
         from = inPlane.multiplyScalar(Math.cos(e)).addScaledVector(w, Math.sin(e));
     } else if (index !== null) {
         const obj = data.objects[index];
@@ -186,7 +195,7 @@ export function gcPose(data, index) {
 
 // Search entries (type 'gc', id: index into data.objects; null: Sgr A*
 // itself, the close-up, ahead of the galaxy-scale Galactic Centre; 'cnd':
-// the circumnuclear disc)
+// the circumnuclear disc; 'cmz': the Central Molecular Zone)
 const SGR_A_TERMS = ['Sgr A*', 'Sgr A', 'Sag A*', 'Sag A', 'SgrA*', 'Sagittarius A*', 'Sagittarius A', 'Sagittarius A star',
     'black hole', 'supermassive black hole', 'Milky Way black hole'];
 export function gcSearchItems(data, normalize) {
@@ -206,7 +215,16 @@ export function gcSearchItems(data, normalize) {
         terms: ['Circumnuclear disc', 'Circumnuclear disk', 'Circumnuclear ring', 'CND', 'CNR'].map(normalize),
         sortKey: -4,
     };
-    return [sgrA, ...(cnd ? [cnd] : []), ...data.objects.map((obj, i) => ({
+    const cmz = data.cmz && {
+        type: 'gc',
+        id: 'cmz',
+        label: 'Central Molecular Zone',
+        sublabel: 'The giant gas clouds round the Galactic Centre · dark lanes',
+        terms: ['Central Molecular Zone', 'CMZ', 'Sgr B2', 'Sagittarius B2', 'Brick', 'The Brick', 'Sgr C', 'Sagittarius C',
+            '20 km/s cloud', '50 km/s cloud', 'Dust ridge'].map(normalize),
+        sortKey: -4,
+    };
+    return [sgrA, ...(cnd ? [cnd] : []), ...(cmz ? [cmz] : []), ...data.objects.map((obj, i) => ({
         type: 'gc',
         id: i,
         label: obj.name === 'PSR J1745-2900' ? 'Galactic Centre magnetar' : obj.name,
