@@ -13,6 +13,7 @@ import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildNucleus } from '../utils/galacticNucleus';
 import { CMZ_GLSL, CMZ_STEPS, CND_GLSL, CND_STEPS, createCmz, createCnd } from '../utils/localDust';
+import { LENS_GLSL, createLensPass } from '../utils/blackHoleLens';
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { DUST_MAG_PER_TAU, createDustMap, dustMapSource } from '../utils/dustMap';
@@ -243,12 +244,31 @@ const gcStarVertexShader = `
     uniform float uMagOffset;
     ${CND_GLSL}
     ${CMZ_GLSL}
+    ${LENS_GLSL}
     ${STAR_VERTEX_GLSL}
 
     void main() {
         float aV = (cndTauTo(cndFrame(position), uCndSteps, 0.5) + cmzTauTo(cmzFrame(position), uCmzSteps, 0.5))
             * ${DUST_MAG_PER_TAU.toFixed(6)};
-        placeStar(position, color, absMag + aV + uMagOffset);
+        // Sgr A*'s image of it (this Points' one of the two), brightened or
+        // dimmed by its magnification; none: hidden
+        float mu;
+        vec3 image = lensImage(position, uCamHigh + uCamLow, mu);
+        float lensMag = mu > 0.0 ? -2.5 * log(mu) / log(10.0) : 100.0;
+        placeStar(image, color, absMag + aV + uMagOffset + lensMag);
+        // A dimmed image (mu < 1) also by its area: the sprite's size caps
+        // brightness (the close-up's stars are all past it), so without
+        // this a 50x fainter image would look the same; at a pixel, by its
+        // alpha
+        if (mu > 0.0 && mu < 1.0) {
+            float s0 = gl_PointSize;
+            float s1 = max(s0 * sqrt(mu), uPixelRatio);
+            vAlpha *= min(1.0, mu * (s0 * s0) / (s1 * s1));
+            vGlare *= mu;
+            gl_PointSize = s1;
+        }
+        gl_PointSize = lensSpriteCap(gl_PointSize);
+        vSize = gl_PointSize;
     }
 `;
 
@@ -1130,6 +1150,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     bvToColor,
                 });
                 s.gc = gc;
+                lens.setRg(data.gc.black_hole.horizon_au / 2);
                 applyBloom();
                 // The nuclear star cluster's bright giants (small: with the data)
                 const file = data.gc.cluster_stars?.file;
@@ -1179,6 +1200,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // glow by their light (GLARE_MAG), except on touch devices (lite).
         const composer = new EffectComposer(renderer);
         const layerPasses = addLayerPasses(composer, layers);
+        // Sgr A*'s lensing of the background (utils/blackHoleLens): after the
+        // sky and star layers, before the close-up's (whose stars are lensed
+        // one by one in their shader)
+        const lens = createLensPass();
+        composer.insertPass(lens.pass, layers.indexOf(starLayer) + 1);
         const glarePass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, GLARE_THRESHOLD);
         glarePass.materialHighPassFilter.fragmentShader = glareHighPassShader;
         composer.addPass(glarePass);
@@ -2299,6 +2325,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             syncCameras();
             setStarCamera(starCameraUniforms, starCamera.position);
             gc?.syncStarCamera(setStarCamera);
+            lens.update(gcLayer.layer.camera, Boolean(gc) && gcLayer.layer.visible);
             solar?.updateMinorMoonFade(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateTextures(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateRingView(solarCamera.position);
@@ -2346,6 +2373,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             dust.dispose();
             starDisc.dispose();
             glarePass.dispose();
+            lens.dispose();
             composer.dispose();
             renderer.dispose();
             // Give the GPU context back now, not when it's garbage

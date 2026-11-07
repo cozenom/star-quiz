@@ -211,7 +211,9 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
                 ['Mass', `${(card.mass_msun / 1e6).toFixed(1)} million Suns`],
                 ['Event horizon', <>{(card.horizon_km / 1e6).toFixed(1)} million km in radius ({card.horizon_au} AU) <span className="star-info-muted">· worked out from its mass</span></>],
                 shadow && ['Shadow', <>{shadow.shadow_au.toFixed(2)} AU in radius, {shadow.shadow_uas} microarcseconds across from here
-                    <div className="star-info-muted">{shadow.about}. Drawn black at its true size in the close-up.</div></>],
+                    <div className="star-info-muted">{shadow.about}. Drawn black at its true size in the close-up, the light from behind it bent round it: the
+                    stars and gas there are pushed out round a ring (the Einstein ring), and each star behind also shows a faint second
+                    image hugging the shadow from the other side. Fly in close to see it (within ~100 AU it fills the view).</div></>],
                 ['Bar', `${fmt(bar.bar_half_length * 2)} ly long, around it`],
                 ...card.facts.map(f => [f.label, f.value]),
                 cnd && ['Circumnuclear disc', <>A clumpy ring of cold gas and dust {fmt(cnd.r_in_pc * LY_PER_PARSEC)} to {fmt(cnd.r_out_pc * LY_PER_PARSEC)} ly
@@ -368,7 +370,7 @@ export function GalacticCentreLegend({ showOrbits, onOpen }) {
         { key: 'clouds', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects: dusty clouds' },
         showOrbits && { key: 'cloud-orbits', swatch: <span className="galaxy-legend-line" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects\' orbits' },
         { key: 'magnetar', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_MAGNETAR_COLOR) }} />, name: 'Magnetar' },
-        { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: 'Sgr A*\'s shadow (true size)' },
+        { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: "Sgr A*'s shadow (true size), light bent round it" },
         { key: 'giants', swatch: <span className="universe-3d-swatch" style={{ background: '#ffc38a', boxShadow: '0 0 3px #ffc38a' }} />, name: "The cluster's brightest red giants, out to ~30 ly (measured on the sky; depths drawn)" },
         { key: 'cluster', swatch: <span className="universe-3d-swatch" style={{ background: hex(NUCLEUS_COLOR) }} />, name: 'The star cluster round it (toned down)' },
         { key: 'cnd', swatch: <span className="universe-3d-swatch" style={{ background: '#140c08', border: '1px solid #64748b' }} />, name: "Dark lanes: the circumnuclear disc's dust" },

@@ -21,6 +21,7 @@
 // it. Its near plane follows the nearest thing to the camera.
 
 import * as THREE from 'three';
+import { lensStarUniforms } from './blackHoleLens';
 import { createLayer } from './layers3d';
 import { AU_PER_LY } from './universe3d';
 
@@ -311,15 +312,34 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
     // Smaller sprites than other stars', with less halo (see
     // GC_STAR_MAX_PX); no dim floor: behind the circumnuclear disc's dust a
     // star is gone
+    // Each drawn twice, for Sgr A*'s two images of a star behind it
+    // (utils/blackHoleLens LENS_GLSL): the twin shares the geometry and the
+    // magnitude offset, its image the inner one
+    const rgAu = data.black_hole.horizon_au / 2;
+    const twins = [];
+    const lensPxPerRad = { value: 1 };  // set each frame (update)
     const closeUpStars = (positions, colors, mags) => {
-        const points = makeStars(positions, colors, mags);
-        points.material.uniforms.uUnitsPerPc.value = AU_PER_PC;
-        points.material.uniforms.uMaxSize.value = GC_STAR_MAX_PX;
-        points.material.uniforms.uGlowMax = { value: GC_STAR_GLOW_MAX };
-        points.material.uniforms.uMinAlpha.value = 0;
-        points.material.uniforms.uMagOffset = { value: 0 };
-        points.frustumCulled = false;
-        layer.scene.add(points);
+        const make = (image, magOffset) => {
+            const points = makeStars(positions, colors, mags);
+            const u = points.material.uniforms;
+            u.uUnitsPerPc.value = AU_PER_PC;
+            u.uMaxSize.value = GC_STAR_MAX_PX;
+            u.uGlowMax = { value: GC_STAR_GLOW_MAX };
+            u.uMinAlpha.value = 0;
+            u.uMagOffset = magOffset;
+            u.uLensRg = { value: rgAu };
+            u.uLensImage = { value: image };
+            u.uLensPxPerRad = lensPxPerRad;
+            Object.assign(u, lensStarUniforms());
+            points.frustumCulled = false;
+            layer.scene.add(points);
+            return points;
+        };
+        const points = make(1, { value: 0 });
+        const twin = make(-1, points.material.uniforms.uMagOffset);
+        twin.geometry.dispose();
+        twin.geometry = points.geometry;
+        twins.push(twin);
         return points;
     };
     const starPoints = closeUpStars(starPositions, starColors, starMags);
@@ -447,6 +467,9 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
             }
             cameraAu.subVectors(camera.position, origin).multiplyScalar(AU_PER_LY);
             const dist = cameraAu.length();
+            // The shadow as seen from here (utils/blackHoleLens): its edge at
+            // sin(angle) = 3 sqrt(3) rg sqrt(1 - 2 rg / r) / r
+            shadow.scale.setScalar(Math.sqrt(Math.max(1 - 2 * rgAu / Math.max(dist, 1e-9), 0)));
             const focal = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
             const px = (au) => 2 * au * focal / Math.max(dist, 1e-9);
             inner = THREE.MathUtils.smoothstep(px(s2 ? s2.orbit.apoapsis_au : 2000), ...CLOSE_UP_PX);
@@ -471,6 +494,7 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
                 clusterPoints.visible = r < GIANTS_FADE_R[1];
             }
             cloudMaterial.uniforms.uFocalPx.value = focal * pixelRatio;
+            lensPxPerRad.value = focal * pixelRatio;
             cloudMaterial.uniforms.uFade.value = inner;
             markerMaterial.uniforms.uFade.value = inner;
             // Near plane: a fraction of the way to the nearest thing
@@ -534,13 +558,14 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
             clusterPoints = closeUpStars(positions, colors, mags);
         },
         // The star materials, for the glare (Universe3D applyBloom)
-        starMaterials: () => [starPoints.material, ...(clusterPoints ? [clusterPoints.material] : [])],
+        starMaterials: () => [starPoints.material, ...(clusterPoints ? [clusterPoints.material] : []), ...twins.map(t => t.material)],
 
         dispose() {
             starPoints.geometry.dispose();
             starPoints.material.dispose();
             clusterPoints?.geometry.dispose();
             clusterPoints?.material.dispose();
+            twins.forEach(t => t.material.dispose());
             orbitLines.forEach(line => {
                 if (!line) return;
                 line.geometry.dispose();
