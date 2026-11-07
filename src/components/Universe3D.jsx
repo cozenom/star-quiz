@@ -593,6 +593,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     // galaxy.json): shown?, an object's card (its index), the data, and
     // whether the close-up is on screen (legend)
     const [showGc, setShowGc] = useState(true);
+    // Sgr A*'s glowing gas in radio false colour (the measured model, as the
+    // EHT sees it) instead of its simulated close-up look (utils/blackHoleLens)
+    const [showRadioFlow, setShowRadioFlow] = useState(false);
     // The browser couldn't start WebGL (its message), or null
     const [webglError, setWebglError] = useState(null);
     const [selectedGc, setSelectedGc] = useState(null);
@@ -748,7 +751,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, showGc, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster, selectedGc };
+    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, showGc, showRadioFlow, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster, selectedGc };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -1151,6 +1154,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 });
                 s.gc = gc;
                 lens.setRg(data.gc.black_hole.horizon_au / 2);
+                if (data.gc.flow) lens.setFlow(data.gc.flow);
                 applyBloom();
                 // The nuclear star cluster's bright giants (small: with the data)
                 const file = data.gc.cluster_stars?.file;
@@ -2325,7 +2329,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             syncCameras();
             setStarCamera(starCameraUniforms, starCamera.position);
             gc?.syncStarCamera(setStarCamera);
-            lens.update(gcLayer.layer.camera, Boolean(gc) && gcLayer.layer.visible);
+            lens.setRadio(optionsRef.current.showRadioFlow);
+            lens.update(gcLayer.layer.camera, Boolean(gc) && gcLayer.layer.visible, yearOf(clockRef.current.time));
             solar?.updateMinorMoonFade(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateTextures(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateRingView(solarCamera.position);
@@ -2567,8 +2572,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     };
     // Fly in to it (its whole orbit in view, as seen from Earth's side,
     // looking at Sgr A*) and open its card; index null: the close-up of
-    // the S-stars round Sgr A*, keeping the centre's card; 'cnd': the
-    // circumnuclear disc's view, likewise
+    // the S-stars round Sgr A*, keeping the centre's card; 'cnd', 'cmz',
+    // 'flow', 'flowTop': the circumnuclear disc's, the Central Molecular
+    // Zone's and Sgr A*'s glowing gas's views, likewise
     const viewGc = (index) => {
         const s = sceneRef.current;
         if (!s) return;
@@ -3224,6 +3230,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         Galactic Centre close-up
                     </label>
                     <label
+                        className={`universe-3d-checkbox ${showGalaxy && showGc ? '' : 'disabled'}`}
+                        title="Sgr A*'s glowing gas as the Event Horizon Telescope sees it: its 230 GHz radio light from the measured model (scaled to Sgr A*'s measured brightness), in the EHT images' false colour, instead of the simulated close-up look"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showRadioFlow}
+                            disabled={!showGalaxy || !showGc}
+                            onChange={(e) => setShowRadioFlow(e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: 'linear-gradient(90deg, #8a1500, #ff8a00, #ffffd0)' }} />
+                        Sgr A*&apos;s gas in radio (EHT view)
+                    </label>
+                    <label
                         className={`universe-3d-checkbox ${showGalaxy ? '' : 'disabled'}`}
                         title="The 199 masers (bright radio spots by newborn stars) whose parallaxes trace the spiral arms (Reid et al. 2019): the measurements the arms are drawn from"
                     >
@@ -3310,7 +3329,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     />
                 )}
                 {gcShown && !(selectedGalaxy && galaxyCards) && (
-                    <GalacticCentreLegend showOrbits={linesOn('gcOrbits')} onOpen={() => openGalaxyCard('centre')} />
+                    <GalacticCentreLegend showOrbits={linesOn('gcOrbits')} radio={showRadioFlow} onOpen={() => openGalaxyCard('centre')} />
                 )}
             </div>
             {selectedGalaxy && galaxyCards && (

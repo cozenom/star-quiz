@@ -200,6 +200,8 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
     const cnd = gc?.cnd;
     const cmz = gc?.cmz;
     const giants = gc?.cluster_stars;
+    const flow = gc?.flow;
+    const sim = flow?.simulated;
     return (
         <>
             <h3 className="star-info-title">Galactic Centre</h3>
@@ -214,6 +216,15 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
                     <div className="star-info-muted">{shadow.about}. Drawn black at its true size in the close-up, the light from behind it bent round it: the
                     stars and gas there are pushed out round a ring (the Einstein ring), and each star behind also shows a faint second
                     image hugging the shadow from the other side. Fly in close to see it (within ~100 AU it fills the view).</div></>],
+                flow && ['Glowing gas', <>{flow.about}. Now and then a hot spot flares and goes round it every
+                    {' '}{flow.spot.period_min} minutes.
+                    {sim && <> {sim.about}. Search &ldquo;accretion disc&rdquo; for the views edge on and from above, then drag to go
+                    round it; speed up the clock to watch it turn.
+                    <div className="star-info-muted">{sim.notes.join('. ')}.</div></>}
+                    <div className="star-info-muted">In radio (under Milky Way, &ldquo;Sgr A*&apos;s gas in radio&rdquo;): the measured
+                    model, which seen from Earth makes a ring {flow.ring_uas} microarcseconds across (the EHT measured 51.8), brighter
+                    where the gas comes towards us. {flow.notes.join('. ')}. Its density is set so its radio brightness is Sgr A*&apos;s
+                    measured {flow.flux_jy} Jy.</div></>],
                 ['Bar', `${fmt(bar.bar_half_length * 2)} ly long, around it`],
                 ...card.facts.map(f => [f.label, f.value]),
                 cnd && ['Circumnuclear disc', <>A clumpy ring of cold gas and dust {fmt(cnd.r_in_pc * LY_PER_PARSEC)} to {fmt(cnd.r_out_pc * LY_PER_PARSEC)} ly
@@ -227,7 +238,7 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
             ]} />
             {gc && <GcObjects gc={gc} onSelectGc={onSelectGc} />}
             <Objects objects={card.objects} onSelectMaser={onSelectMaser} />
-            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), ...(giants?.refs ?? []), ...(cnd?.refs ?? []), ...(cmz?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
+            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), ...(flow?.refs ?? []), ...(sim?.refs ?? []), ...(giants?.refs ?? []), ...(cnd?.refs ?? []), ...(cmz?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
         </>
     );
 }
@@ -362,7 +373,7 @@ const DEPTH_NAMES = {
 };
 
 // The close-up's key, shown while it is on screen
-export function GalacticCentreLegend({ showOrbits, onOpen }) {
+export function GalacticCentreLegend({ showOrbits, radio, onOpen }) {
     const items = [
         { key: 'stars', swatch: <span className="universe-3d-swatch" style={{ background: '#dbe6ff' }} />, name: 'S-stars (blue-white: young; orange: red giants)' },
         { key: 'young', swatch: <span className="universe-3d-swatch" style={{ background: '#cfdcff', boxShadow: '0 0 4px #cfdcff' }} />, name: 'Young massive stars, out to ~2 ly (most depths drawn)' },
@@ -371,6 +382,9 @@ export function GalacticCentreLegend({ showOrbits, onOpen }) {
         showOrbits && { key: 'cloud-orbits', swatch: <span className="galaxy-legend-line" style={{ background: hex(GC_CLOUD_COLOR) }} />, name: 'G objects\' orbits' },
         { key: 'magnetar', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_MAGNETAR_COLOR) }} />, name: 'Magnetar' },
         { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: "Sgr A*'s shadow (true size), light bent round it" },
+        radio
+            ? { key: 'flow', swatch: <span className="universe-3d-swatch" style={{ background: 'linear-gradient(90deg, #8a1500, #ff8a00, #ffffd0)' }} />, name: 'Glowing gas round it (false colour: its radio light, as the EHT sees it)' }
+            : { key: 'flow', swatch: <span className="universe-3d-swatch" style={{ background: 'linear-gradient(90deg, #ff6b24, #ffdba8)' }} />, name: 'Glowing gas round it, simulated (its radio light in warm colours: cream coming towards you, orange going away)' },
         { key: 'giants', swatch: <span className="universe-3d-swatch" style={{ background: '#ffc38a', boxShadow: '0 0 3px #ffc38a' }} />, name: "The cluster's brightest red giants, out to ~30 ly (measured on the sky; depths drawn)" },
         { key: 'cluster', swatch: <span className="universe-3d-swatch" style={{ background: hex(NUCLEUS_COLOR) }} />, name: 'The star cluster round it (toned down)' },
         { key: 'cnd', swatch: <span className="universe-3d-swatch" style={{ background: '#140c08', border: '1px solid #64748b' }} />, name: "Dark lanes: the circumnuclear disc's dust" },

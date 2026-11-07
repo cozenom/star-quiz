@@ -87,6 +87,14 @@ const CND_VIEW_ELEVATION_DEG = 25;
 // against the nuclear disc's glow
 const CMZ_VIEW_LY = 1800;
 const CMZ_VIEW_ELEVATION_DEG = 35;
+// The views of Sgr A*'s glowing gas (search): this many rg from the hole,
+// this far above the flow's plane (deg): nearly edge on (its far side's
+// light bent over the shadow) or from above; on the side where its axis is
+// the screen's vertical (the view keeps celestial north up), so it lies
+// level. (Our 3D sketch's distance, 26 Rs, and its edge-on and top-down
+// views)
+const FLOW_VIEW_RG = 52;
+const FLOW_VIEW_ELEVATION_DEG = { flow: 10, flowTop: 90 };
 // How close the camera may get to Sgr A* (AU): just outside its shadow
 const MIN_DISTANCE_AU = 0.4;
 
@@ -165,15 +173,38 @@ export function gcLabel(obj) {
 
 // Camera views (ly from the Sun), as seen from Earth's side, looking at
 // Sgr A*: an object's (its whole orbit in view; the magnetar's place), the
-// close-up's (index null), the circumnuclear disc's ('cnd') or the Central
-// Molecular Zone's ('cmz').
+// close-up's (index null), the circumnuclear disc's ('cnd'), the Central
+// Molecular Zone's ('cmz') or Sgr A*'s glowing gas's ('flow': nearly edge on;
+// 'flowTop': from above).
 // {position, target, minDistance}
 export function gcPose(data, index) {
     const target = new THREE.Vector3(...data.origin_ly);
     const toEarth = new THREE.Vector3(...data.sky.away).negate();
     let au = CLOSE_UP_VIEW_AU;
     let from = toEarth;
-    if (index === 'cnd' || index === 'cmz') {
+    if ((index === 'flow' || index === 'flowTop') && data.flow) {
+        au = FLOW_VIEW_RG * data.black_hole.horizon_au / 2;
+        const w = new THREE.Vector3(...data.flow.axis);
+        const up = new THREE.Vector3(0, 1, 0);
+        const e = THREE.MathUtils.degToRad(Math.min(FLOW_VIEW_ELEVATION_DEG[index], 89.9));
+        // In the plane of the axis and north (so the axis is the screen's
+        // vertical): of the two sides and the flow's two faces (it looks
+        // much the same from either), the one where the camera's face
+        // points furthest up the screen (the far side arched over the top)
+        const inPlane = up.clone().addScaledVector(w, -up.dot(w)).normalize();
+        let best = -Infinity;
+        for (const sign of [1, -1]) {
+            for (const face of [1, -1]) {
+                const f = inPlane.clone().multiplyScalar(sign * Math.cos(e)).addScaledVector(w, face * Math.sin(e));
+                const screenUp = up.clone().addScaledVector(f, -up.dot(f));
+                const margin = face * screenUp.dot(w);
+                if (margin > best) {
+                    best = margin;
+                    from = f;
+                }
+            }
+        }
+    } else if (index === 'cnd' || index === 'cmz') {
         const [ly, deg, axes] = index === 'cnd' ? [CND_VIEW_LY, CND_VIEW_ELEVATION_DEG, data.cnd.axes]
             : [CMZ_VIEW_LY, CMZ_VIEW_ELEVATION_DEG, data.cmz.axes];
         au = ly * AU_PER_LY;
@@ -196,7 +227,8 @@ export function gcPose(data, index) {
 
 // Search entries (type 'gc', id: index into data.objects; null: Sgr A*
 // itself, the close-up, ahead of the galaxy-scale Galactic Centre; 'cnd':
-// the circumnuclear disc; 'cmz': the Central Molecular Zone)
+// the circumnuclear disc; 'cmz': the Central Molecular Zone; 'flow',
+// 'flowTop': Sgr A*'s glowing gas)
 const SGR_A_TERMS = ['Sgr A*', 'Sgr A', 'Sag A*', 'Sag A', 'SgrA*', 'Sagittarius A*', 'Sagittarius A', 'Sagittarius A star',
     'black hole', 'supermassive black hole', 'Milky Way black hole'];
 export function gcSearchItems(data, normalize) {
@@ -225,7 +257,24 @@ export function gcSearchItems(data, normalize) {
             '20 km/s cloud', '50 km/s cloud', 'Dust ridge'].map(normalize),
         sortKey: -4,
     };
-    return [sgrA, ...(cnd ? [cnd] : []), ...(cmz ? [cmz] : []), ...data.objects.map((obj, i) => ({
+    const flowTerms = ['accretion flow', 'accretion disc', 'accretion disk', 'Sgr A* disc', 'Sgr A* disk', 'black hole disc',
+        'black hole disk', 'hot flow', 'Sgr A* gas'];
+    const flows = data.flow ? [{
+        type: 'gc',
+        id: 'flow',
+        label: "Sgr A*'s glowing gas (edge on)",
+        sublabel: 'Its hot flow close up, nearly edge on · the light from behind bent over the shadow',
+        terms: [...flowTerms, 'edge on'].map(normalize),
+        sortKey: -4,
+    }, {
+        type: 'gc',
+        id: 'flowTop',
+        label: "Sgr A*'s glowing gas (from above)",
+        sublabel: 'Its hot flow close up, looking down its axis',
+        terms: [...flowTerms, 'top down', 'face on'].map(normalize),
+        sortKey: -3,
+    }] : [];
+    return [sgrA, ...(cnd ? [cnd] : []), ...(cmz ? [cmz] : []), ...flows, ...data.objects.map((obj, i) => ({
         type: 'gc',
         id: i,
         label: obj.name === 'PSR J1745-2900' ? 'Galactic Centre magnetar' : obj.name,
@@ -413,10 +462,12 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
     marker.visible = magnetar >= 0;
     layer.scene.add(marker);
 
-    // Sgr A*'s shadow: opaque black, writes depth (drawn before the rest)
+    // Sgr A*'s shadow: writes depth only (drawn before the rest), hiding
+    // what's behind it; the lens pass (utils/blackHoleLens) draws it black,
+    // with the glowing gas in front of it
     const shadow = new THREE.Mesh(
         new THREE.SphereGeometry(data.black_hole.shadow_au, 48, 24),
-        new THREE.MeshBasicMaterial({ color: 0x000000 }),
+        new THREE.MeshBasicMaterial({ color: 0x000000, colorWrite: false }),
     );
     shadow.renderOrder = -1;
     layer.scene.add(shadow);
