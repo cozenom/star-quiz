@@ -67,6 +67,13 @@ const NEAR_FRACTION = 0.3;
 const VIEW_SCALE = 2.2;
 const VIEW_MIN_AU = 300;
 const CLOSE_UP_VIEW_AU = 6000;
+// The circumnuclear disc's view (search): this far from Sgr A* (ly), this
+// far above its plane (deg), on Earth's side. Its dust shows best nearly
+// edge on (from Earth's side, 60 deg from face on, a sight line through it
+// hides at most the cluster's light behind it, about half), but below
+// ~20 deg its inner rim hides the stars round Sgr A* too
+const CND_VIEW_LY = 35;
+const CND_VIEW_ELEVATION_DEG = 25;
 // How close the camera may get to Sgr A* (AU): just outside its shadow
 const MIN_DISTANCE_AU = 0.4;
 
@@ -77,7 +84,9 @@ const KEPLER_ITERATIONS = 30;
 // spike; together they whited out the middle. So (ours): sprites at most
 // this big (CSS px, before the halo; other stars' 24), their halos grown
 // at most this share of the way (a crowd of halos made a white disc), and
-// this share of the glare spike. Their order of brightness stays true.
+// this share of the glare spike. Up close nearly all of them are brighter
+// than the cap's magnitude (+1.1), so they draw the same size: their order
+// of brightness doesn't show (the 24 px cap had the same problem).
 const GC_STAR_MAX_PX = 9;
 const GC_STAR_GLOW_MAX = 0.25;
 export const GC_GLARE_SHARE = 0.03;
@@ -142,25 +151,35 @@ export function gcLabel(obj) {
 }
 
 // Camera views (ly from the Sun), as seen from Earth's side, looking at
-// Sgr A*: an object's (its whole orbit in view; the magnetar's place), or
-// the close-up's (index null). {position, target, minDistance}
+// Sgr A*: an object's (its whole orbit in view; the magnetar's place), the
+// close-up's (index null) or the circumnuclear disc's ('cnd').
+// {position, target, minDistance}
 export function gcPose(data, index) {
     const target = new THREE.Vector3(...data.origin_ly);
+    const toEarth = new THREE.Vector3(...data.sky.away).negate();
     let au = CLOSE_UP_VIEW_AU;
-    if (index !== null) {
+    let from = toEarth;
+    if (index === 'cnd') {
+        au = CND_VIEW_LY * AU_PER_LY;
+        // Earth's direction laid in the disc's plane, then tilted up
+        const w = new THREE.Vector3(...data.cnd.axes.w);
+        const inPlane = toEarth.clone().addScaledVector(w, -toEarth.dot(w)).normalize();
+        const e = THREE.MathUtils.degToRad(CND_VIEW_ELEVATION_DEG) * Math.sign(toEarth.dot(w) || 1);
+        from = inPlane.multiplyScalar(Math.cos(e)).addScaledVector(w, Math.sin(e));
+    } else if (index !== null) {
         const obj = data.objects[index];
         au = Math.max(VIEW_SCALE * (obj.orbit ? obj.orbit.apoapsis_au : Math.hypot(...obj.position_au)), VIEW_MIN_AU);
     }
-    const toEarth = new THREE.Vector3(...data.sky.away).negate();
     return {
-        position: target.clone().addScaledVector(toEarth, au / AU_PER_LY).toArray(),
+        position: target.clone().addScaledVector(from, au / AU_PER_LY).toArray(),
         target: target.toArray(),
         minDistance: MIN_DISTANCE_AU / AU_PER_LY,
     };
 }
 
 // Search entries (type 'gc', id: index into data.objects; null: Sgr A*
-// itself, the close-up, ahead of the galaxy-scale Galactic Centre)
+// itself, the close-up, ahead of the galaxy-scale Galactic Centre; 'cnd':
+// the circumnuclear disc)
 const SGR_A_TERMS = ['Sgr A*', 'Sgr A', 'Sag A*', 'Sag A', 'SgrA*', 'Sagittarius A*', 'Sagittarius A', 'Sagittarius A star',
     'black hole', 'supermassive black hole', 'Milky Way black hole'];
 export function gcSearchItems(data, normalize) {
@@ -172,7 +191,15 @@ export function gcSearchItems(data, normalize) {
         terms: SGR_A_TERMS.map(normalize),
         sortKey: -12,
     };
-    return [sgrA, ...data.objects.map((obj, i) => ({
+    const cnd = data.cnd && {
+        type: 'gc',
+        id: 'cnd',
+        label: 'Circumnuclear disc',
+        sublabel: 'Ring of gas and dust round Sgr A* · dark lanes',
+        terms: ['Circumnuclear disc', 'Circumnuclear disk', 'Circumnuclear ring', 'CND', 'CNR'].map(normalize),
+        sortKey: -4,
+    };
+    return [sgrA, ...(cnd ? [cnd] : []), ...data.objects.map((obj, i) => ({
         type: 'gc',
         id: i,
         label: obj.name === 'PSR J1745-2900' ? 'Galactic Centre magnetar' : obj.name,
@@ -261,6 +288,8 @@ export function buildGalacticCentre({ layer, origin }, data, pixelRatio, { makeS
     // Smaller sprites than other stars', with less halo (see GC_STAR_MAX_PX)
     starPoints.material.uniforms.uMaxSize.value = GC_STAR_MAX_PX;
     starPoints.material.uniforms.uGlowMax = { value: GC_STAR_GLOW_MAX };
+    // No dim floor: behind the circumnuclear disc's dust a star is gone
+    starPoints.material.uniforms.uMinAlpha.value = 0;
     starPoints.frustumCulled = false;
     layer.scene.add(starPoints);
 

@@ -12,9 +12,10 @@ import { buildSmallBodyCloud, COMET_FAMILIES, smallBodyColor } from '../utils/sm
 import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildNucleus } from '../utils/galacticNucleus';
+import { CND_GLSL, CND_STEPS, createCnd } from '../utils/circumnuclearDisc';
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
-import { createDustMap, dustMapSource } from '../utils/dustMap';
+import { DUST_MAG_PER_TAU, createDustMap, dustMapSource } from '../utils/dustMap';
 import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars, dwarfFloor } from '../utils/landmarks3d';
 import { GC_GLARE_SHARE, buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
 import {
@@ -230,6 +231,21 @@ const starVertexShader = `
     }
 `;
 
+// The Galactic Centre close-up's stars (AU): dimmed by the circumnuclear
+// disc's dust between the camera and each (utils/circumnuclearDisc)
+const gcStarVertexShader = `
+    attribute float absMag;
+    attribute vec3 color;
+    uniform int uCndSteps;
+    ${CND_GLSL}
+    ${STAR_VERTEX_GLSL}
+
+    void main() {
+        float aV = cndTauTo(cndFrame(position), uCndSteps, 0.5) * ${DUST_MAG_PER_TAU.toFixed(6)};
+        placeStar(position, color, absMag + aV);
+    }
+`;
+
 // The Gaia tiers and RR Lyrae (utils/farStars) as they are in their files:
 // int16 positions and uint8 magnitude and B-V codes, which the GPU reads as
 // floats; scaled here with the meta's steps (farStarDecoding), the colour
@@ -329,12 +345,13 @@ function makeStarMaterial(vertexShader, pixelRatio, starCamera, maxSize, decodin
     });
 }
 
-function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxSize = SPRITE_MAX_SIZE_PX) {
+// shader: {vertexShader, uniforms} instead of the plain star shader's
+function makeStarPoints(positions, colors, absMags, pixelRatio, starCamera, maxSize = SPRITE_MAX_SIZE_PX, shader = null) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setAttribute('absMag', new THREE.BufferAttribute(absMags, 1));
-    return new THREE.Points(geometry, makeStarMaterial(starVertexShader, pixelRatio, starCamera, maxSize));
+    return new THREE.Points(geometry, makeStarMaterial(shader?.vertexShader ?? starVertexShader, pixelRatio, starCamera, maxSize, shader?.uniforms));
 }
 
 // Once on the GPU, a compact file's rows aren't needed in JS
@@ -987,6 +1004,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // points at every scale over a faint glow, after the dust volume
         // (their own dust in front)
         let nucleus = null;
+        // The circumnuclear disc's dust (utils/circumnuclearDisc): dims the
+        // nucleus, the close-up's stars and the minispiral behind it; its
+        // grid fetched with the close-up's data
+        const cnd = createCnd();
         // The landmarks (landmarks.json): star clusters and nebulae, each
         // kind real, shown from closer in than the model; a kind's Gaia stars
         // (several MB), or the nebulae's models, once the camera is near one
@@ -1046,15 +1067,30 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             dust.setGalaxyFrame(data.to_scene);
             band = buildMilkyWayBand(renderer, skyLayer.scene, data, { lite, dust });
             galaxyDust = buildGalaxyDust(scene, data, { lite, dust, background: renderer.getClearColor(new THREE.Color()) });
-            nucleus = buildNucleus(scene, data, { lite, dust, pixelRatio });
+            nucleus = buildNucleus(scene, data, { lite, dust, cnd, pixelRatio });
             for (const kind of LANDMARK_KINDS) {
                 if (!data.landmarks?.[kind]) continue;
                 clusterData[kind] = data.landmarks[kind];
-                clusters[kind] = buildClusters(scene, kind, clusterData[kind], pixelRatio);
+                clusters[kind] = buildClusters(scene, kind, clusterData[kind], pixelRatio, { cnd, lite });
+            }
+            if (data.gc?.cnd) {
+                fetch(`${import.meta.env.BASE_URL}data/${data.gc.cnd.file}`)
+                    .then((response) => {
+                        if (!response.ok) throw new Error(`Failed to load ${data.gc.cnd.file}: ${response.statusText}`);
+                        return response.arrayBuffer();
+                    })
+                    .then((buffer) => {
+                        if (!disposed) cnd.load(data.gc.cnd, buffer, data.gc.origin_ly, data.to_scene);
+                    })
+                    .catch(error => console.error('Error loading the circumnuclear disc:', error));
             }
             if (data.gc) {
+                const gcStarShader = {
+                    vertexShader: gcStarVertexShader,
+                    uniforms: { ...cnd.uniforms('gc'), uCndSteps: { value: CND_STEPS[lite ? 'lite' : 'full'].points } },
+                };
                 gc = buildGalacticCentre(gcLayer, data.gc, pixelRatio, {
-                    makeStars: (p, c, m) => makeStarPoints(p, c, m, pixelRatio, gcStarCamera),
+                    makeStars: (p, c, m) => makeStarPoints(p, c, m, pixelRatio, gcStarCamera, SPRITE_MAX_SIZE_PX, gcStarShader),
                     starCamera: gcStarCamera,
                     bvToColor,
                 });
@@ -2114,6 +2150,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             galaxyDust?.update(camera.position);
             nucleus?.setFade(galaxy.fade());
             nucleus?.update(camera.position);
+            cnd.update(camera.position);
             // The star clusters; each kind's stars loaded once near one of
             // them out of the Solar System (or one is opened)
             const clustersNow = {};
@@ -2250,6 +2287,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             band?.dispose();
             galaxyDust?.dispose();
             nucleus?.dispose();
+            cnd.dispose();
             Object.values(clusters).forEach(c => c.dispose());
             gc?.dispose();
             dust.dispose();
@@ -2448,14 +2486,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     };
     // Fly in to it (its whole orbit in view, as seen from Earth's side,
     // looking at Sgr A*) and open its card; index null: the close-up of
-    // the S-stars round Sgr A*, keeping the centre's card
+    // the S-stars round Sgr A*, keeping the centre's card; 'cnd': the
+    // circumnuclear disc's view, likewise
     const viewGc = (index) => {
         const s = sceneRef.current;
         if (!s) return;
         setShowGalaxy(true);
         setShowGc(true);
-        if (index !== null) selectGc(index);
-        setFocus({ type: 'gc', index });
+        const object = typeof index === 'number' ? index : null;
+        if (object !== null) selectGc(object);
+        setFocus({ type: 'gc', index: object });
         loadGalaxyData().then((data) => {
             if (sceneRef.current !== s || !data.gc) return;
             const pose = gcPose(data.gc, index);
@@ -2468,8 +2508,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         if (item.type === 'galaxy') {
             viewGalaxy(item.id);
         } else if (item.type === 'gc') {
-            // Sgr A* itself: the close-up, with the centre's card
-            if (item.id === null) openGalaxyCard('centre');
+            // Sgr A* itself, the circumnuclear disc: with the centre's card
+            if (typeof item.id !== 'number') openGalaxyCard('centre');
             viewGc(item.id);
         } else if (item.type === 'maser') {
             viewMaser(item.id);

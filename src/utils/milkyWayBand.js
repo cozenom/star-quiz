@@ -162,7 +162,13 @@ export const BAND_GLSL = /* glsl */ `
     // One part's light (0: cluster, 1: disc) along origin + t dir, t0..t1:
     // n samples evenly spaced in asinh(s / s0), s = t from the ray's closest
     // approach to Sgr A*, s0 its miss distance (at least the part's floor):
-    // dense where the profile is steep, a few per factor of distance beyond
+    // dense where the profile is steep, a few per factor of distance beyond.
+    // Each sample times NUCLEUS_ATTENUATION(t), the light let through from
+    // there (1 unless the shader defines it: the circumnuclear disc's dust,
+    // utils/circumnuclearDisc CND_RAY_GLSL)
+    #ifndef NUCLEUS_ATTENUATION
+    #define NUCLEUS_ATTENUATION(t) 1.0
+    #endif
     float nucleusPart(int part, vec3 origin, vec3 dir, float t0, float t1, int n) {
         float tc = -dot(origin, dir);
         vec3 c = origin + dir * tc;
@@ -174,7 +180,7 @@ export const BAND_GLSL = /* glsl */ `
             if (i >= n) break;
             float u = u0 + (float(i) + 0.5) * du;
             vec3 p = c + dir * (s0 * sinh(u));
-            sum += (part == 0 ? nscDensity(p) : nsdDensity(p)) * cosh(u);
+            sum += (part == 0 ? nscDensity(p) : nsdDensity(p)) * cosh(u) * NUCLEUS_ATTENUATION(tc + s0 * sinh(u));
         }
         return sum * s0 * du;
     }

@@ -33,6 +33,7 @@
 // tell at this scale, so each point / fragment tests its line of sight.
 
 import * as THREE from 'three';
+import { CND_GLSL, CND_STEPS } from './circumnuclearDisc.js';
 import { bvToColor } from './universe3d.js';
 
 // Old stars: yellow-white (raw hex, ours; also the legend's swatch)
@@ -359,8 +360,9 @@ const noiseGlsl = /* glsl */ `
 // A cloud's points: each a soft dot of the part's point size (ly), its
 // flux spread over it, so the gas's surface brightness holds as it's
 // approached; a dot under a pixel keeps its total light. Dimmed behind a
-// lobe; coloured by its own colour (rgb: from a photo, linear), or the
-// part's
+// lobe, and (CND defined: the part's dimmed_by_cnd) by the circumnuclear
+// disc's dust in front; coloured by its own colour (rgb: from a photo,
+// linear), or the part's
 const cloudVertexShader = /* glsl */ `
     attribute float flux;
     attribute vec3 rgb;
@@ -370,6 +372,10 @@ const cloudVertexShader = /* glsl */ `
     varying float vFlux;
     varying vec3 vRgb;
     ${occlusionGlsl}
+    #ifdef CND
+    uniform int uCndSteps;
+    ${CND_GLSL}
+    #endif
     void main() {
         vec4 world = modelMatrix * vec4(position, 1.0);
         vec4 mv = viewMatrix * world;
@@ -380,6 +386,9 @@ const cloudVertexShader = /* glsl */ `
         // with near_fade (px), its light goes (left to the haze round it)
         float near = uNearFade > 0.0 ? 1.0 - smoothstep(uNearFade, 2.0 * uNearFade, size) : 1.0;
         vFlux = flux * min(size * size, 1.0) * near * mix(1.0, ${DUST_HIDDEN.toFixed(3)}, hidden);
+        #ifdef CND
+        if (vFlux > 0.0) vFlux *= exp(-cndTauTo(cndFrame(world.xyz), uCndSteps, 0.5));
+        #endif
         vRgb = rgb;
         gl_Position = projectionMatrix * mv;
     }
@@ -481,8 +490,9 @@ function placePart(object, model, centre) {
 
 // A nebula's cloud part (nebula_<id>_<part>.bin: int16 x, y, z per point,
 // then a uint8 log flux each, then with rgb uint8 r, g, b each) -> Points;
-// occluders: its nebula's lobes
-function nebulaCloud(buffer, model, centre, pixelRatio, occluders) {
+// occluders: its nebula's lobes; cnd: {cnd, lite} (utils/circumnuclearDisc)
+// for a part dimmed_by_cnd
+function nebulaCloud(buffer, model, centre, pixelRatio, occluders, cnd) {
     const count = model.count;
     const local = new Int16Array(buffer, 0, count * 3);
     const bytes = new Uint8Array(buffer, count * 6, count);
@@ -503,7 +513,12 @@ function nebulaCloud(buffer, model, centre, pixelRatio, occluders) {
             uPointLy: { value: model.point_ly * pixelRatio },
             uNearFade: { value: (model.near_fade ?? 0) * pixelRatio },
             ...occlusionUniforms(occluders, centre),
+            ...(model.dimmed_by_cnd && cnd?.cnd ? {
+                ...cnd.cnd.uniforms('star'),
+                uCndSteps: { value: CND_STEPS[cnd.lite ? 'lite' : 'full'].points },
+            } : {}),
         },
+        defines: model.dimmed_by_cnd && cnd?.cnd ? { CND: '' } : {},
         vertexShader: cloudVertexShader,
         fragmentShader: cloudFragmentShader,
         transparent: true,
@@ -568,8 +583,9 @@ function nebulaMesh(buffer, model, centre, occluders) {
 // addModels(buffers) (nebulae: every part's file, in order),
 // nearest(cameraLy) (ly to the nearest one's centre), labels() [{index,
 // name, position (Vector3)}], info(i), pick(camera, width, height, x, y,
-// radiusPx) -> index | null, dispose()}
-export function buildClusters(scene, kind, g, pixelRatio) {
+// radiusPx) -> index | null, dispose()}. cnd: {cnd (utils/circumnuclearDisc
+// createCnd), lite}, for the parts dimmed by it
+export function buildClusters(scene, kind, g, pixelRatio, cnd = null) {
     const k = KIND[kind];
     const n = g.name.length;
     const radius = new Float32Array(n);
@@ -662,7 +678,7 @@ export function buildClusters(scene, kind, g, pixelRatio) {
                 const centre = new THREE.Vector3().fromArray(g.xyz_ly, 3 * i);
                 const occluders = parts.find(p => p.occluders)?.occluders;
                 for (const part of parts) {
-                    const mesh = part.kind === 'cloud' ? nebulaCloud(buffers[b++], part, centre, pixelRatio, occluders)
+                    const mesh = part.kind === 'cloud' ? nebulaCloud(buffers[b++], part, centre, pixelRatio, occluders, cnd)
                         : nebulaMesh(buffers[b++], part, centre, occluders);
                     scene.add(mesh);
                     models.push({ index: i, mesh, centre, radius: g.radius_ly[i] });

@@ -3,7 +3,7 @@ import { ARM_LABELS, GALAXY_COLORS, MASER_COLOR } from '../utils/galaxy3d';
 import { DWARF_COLOR, DWARF_TRUE_COLOR, LANDMARK_NAMES, GLOBULAR_COLOR, NEBULA_COLOR, OPEN_AGE_COLORS } from '../utils/landmarks3d';
 import { GC_CLOUD_COLOR, GC_MAGNETAR_COLOR, gcKindName, gcState, msOf, yearOf } from '../utils/galacticCentre3d';
 import { NUCLEUS_COLOR } from '../utils/milkyWayBand';
-import { AU_PER_LY, KM_PER_AU } from '../utils/universe3d';
+import { AU_PER_LY, KM_PER_AU, LY_PER_PARSEC } from '../utils/universe3d';
 import MapLegend from './MapLegend';
 
 // The Milky Way model's cards: the galaxy as a whole (with the key to the
@@ -197,6 +197,7 @@ function MilkyWay({ card, actions, trueColors }) {
 
 function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
     const shadow = gc?.black_hole;
+    const cnd = gc?.cnd;
     return (
         <>
             <h3 className="star-info-title">Galactic Centre</h3>
@@ -211,10 +212,15 @@ function Centre({ card, bar, gc, onSelectMaser, onSelectGc, actions }) {
                     <div className="star-info-muted">{shadow.about}. Drawn black at its true size in the close-up.</div></>],
                 ['Bar', `${fmt(bar.bar_half_length * 2)} ly long, around it`],
                 ...card.facts.map(f => [f.label, f.value]),
+                cnd && ['Circumnuclear disc', <>A clumpy ring of cold gas and dust {fmt(cnd.r_in_pc * LY_PER_PARSEC)} to {fmt(cnd.r_out_pc * LY_PER_PARSEC)} ly
+                    from it, seen {cnd.i_deg}° from face on, turning at about {cnd.speed_km_s} km/s: tens of thousands of Suns of
+                    gas. {cnd.about}
+                    <div className="star-info-muted">{cnd.drawn} {Math.round(cnd.kept_share * 100)}% of the gas there moves with the
+                    disc; the rest (falling in, or in the big clouds round the centre) is left out. {cnd.mass_note}.</div></>],
             ]} />
             {gc && <GcObjects gc={gc} onSelectGc={onSelectGc} />}
             <Objects objects={card.objects} onSelectMaser={onSelectMaser} />
-            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
+            <Sources refs={[card.mass_ref, ...card.facts.map(f => f.ref), ...(shadow?.refs ?? []), ...(cnd?.refs ?? []), 'Reid et al. 2019, ApJ 885, 131 (Table 1)']} />
         </>
     );
 }
@@ -356,6 +362,7 @@ export function GalacticCentreLegend({ showOrbits, onOpen }) {
         { key: 'magnetar', swatch: <span className="universe-3d-swatch" style={{ background: hex(GC_MAGNETAR_COLOR) }} />, name: 'Magnetar' },
         { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: 'Sgr A*\'s shadow (true size)' },
         { key: 'cluster', swatch: <span className="universe-3d-swatch" style={{ background: hex(NUCLEUS_COLOR) }} />, name: 'The star cluster round it (toned down)' },
+        { key: 'cnd', swatch: <span className="universe-3d-swatch" style={{ background: '#140c08', border: '1px solid #64748b' }} />, name: "Dark lanes: the circumnuclear disc's dust" },
     ].filter(Boolean);
     return <MapLegend title="Galactic Centre" onTitle={onOpen} storageKey="universe3d.legend.gc" items={items} />;
 }
