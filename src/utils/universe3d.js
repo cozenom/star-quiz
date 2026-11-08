@@ -484,37 +484,45 @@ export function buildSearchIndex(constellationData, starBuffers, lineStarInfo, p
 }
 
 // Best matches for a query: whole-term prefix, then word prefix, then
-// substring. "HIP 12345" or a bare number looks up a Hipparcos star.
+// substring. "HIP 12345" or a bare number looks up a Hipparcos star, listed
+// first; a bare number matches names too ("404": V404 Cygni).
 export function searchIndex(items, starBuffers, query, limit = 8) {
     const q = normalizeSearchText(query);
     if (!q) return [];
 
+    const found = [];
     const hipMatch = q.match(/^(?:hip ?)?(\d+)$/);
     if (hipMatch) {
         const index = starBuffers.hipToIndex.get(Number(hipMatch[1]));
-        if (index === undefined) return [];
-        const rec = starRecord(starBuffers, index);
-        return [{
-            type: 'star',
-            starIndex: index,
-            label: rec.name || `HIP ${rec.hip}`,
-            sublabel: `HIP ${rec.hip} · mag ${rec.mag.toFixed(1)}`,
-        }];
+        if (index !== undefined) {
+            const rec = starRecord(starBuffers, index);
+            found.push({
+                type: 'star',
+                starIndex: index,
+                label: rec.name || `HIP ${rec.hip}`,
+                sublabel: `HIP ${rec.hip} · mag ${rec.mag.toFixed(1)}`,
+            });
+        }
+        if (q.startsWith('hip')) return found;
     }
 
+    // A bare number also matches a designation's number: "404" V404, "31" M31
+    const isNumber = /^\d+$/.test(q);
+    const designation = (word) => word.length > q.length && word.endsWith(q) && /^[a-z]+$/.test(word.slice(0, -q.length));
     const scored = [];
     for (const item of items) {
         let best = Infinity;
         for (const term of item.terms) {
             if (term === q) best = Math.min(best, 0);
             else if (term.startsWith(q)) best = Math.min(best, 1);
+            else if (isNumber && term.split(' ').some(designation)) best = Math.min(best, 1.5);
             else if (term.split(' ').some(word => word.startsWith(q))) best = Math.min(best, 2);
             else if (term.includes(q)) best = Math.min(best, 3);
         }
         if (best < Infinity) scored.push({ item, score: best });
     }
     scored.sort((a, b) => a.score - b.score || a.item.sortKey - b.item.sortKey);
-    return scored.slice(0, limit).map(s => s.item);
+    return [...found, ...scored.map(s => s.item)].slice(0, limit);
 }
 
 // The point the camera orbits for a constellation: the average sky direction

@@ -178,7 +178,7 @@ const LINE_OPTIONS = [
     { kind: 'maserRanges', label: 'Maser distance ranges', needs: 'masers', title: 'The faint line through each measured maser: its distance\'s uncertainty' },
     { kind: 'galacticAxis', label: 'Galactic axis', needs: 'galaxy', title: 'A line through the galaxy\'s centre, square to its disc, out to galactic north and south' },
     { kind: 'gcOrbits', label: 'Orbits round Sgr A*', needs: 'galaxy', title: 'In the Galactic Centre close-up: the measured orbits of the stars and dusty clouds round the black hole' },
-    { kind: 'bhOrbits', label: 'Orbits round black holes', title: 'Close to Gaia BH1, BH2 and BH3: each star\'s measured orbit round its black hole' },
+    { kind: 'bhOrbits', label: 'Orbits round black holes', title: 'Close to a stellar black hole: its star\'s measured orbit round it (and a fed one\'s jet direction)' },
 ];
 
 // The galactic poles on the sky (J2000, as Hipparcos defines them), in
@@ -2258,15 +2258,24 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // the hole is kept exactly from frame to frame (bhView); then back
         // to ly from the Sun (leaveHoleFrame), turned to the hole. The
         // close-up's layer camera takes the exact place (bh.update's view).
+        // A fed black hole's frame is turned so its disc's axis is the
+        // view's up (bh.upAxis): the disc level on screen, dragging orbiting
+        // round its axis (its up taken over in BH_ROLL_MS on arrival).
         // bhView: {follow (the s.follow it is for), at (the camera from the
         // hole, ly), camera, target (where they were left, ly from the Sun:
-        // moved since by something else, it starts again from there)}. A
-        // flight to the hole lands on it.
+        // moved since by something else, it starts again from there),
+        // since (when riding along began, ms)}. A flight to the hole lands
+        // on it.
+        const BH_ROLL_MS = 1500;
         const bhNow = new THREE.Vector3();
         const lookMatrix = new THREE.Matrix4();
         const holeHere = new THREE.Vector3();  // the hole, in its own frame
+        const toLocal = new THREE.Quaternion();
+        const fromLocal = new THREE.Quaternion();
+        const lookUp = new THREE.Vector3();
         let bhView = null;
-        const enterHoleFrame = () => {
+        let bhSince = 0;
+        const enterHoleFrame = (now) => {
             const i = s.follow.bh;
             if (i === null || i === undefined || !bh) return false;
             bh.holeLy(i, yearOf(clockRef.current.time), bhNow);
@@ -2276,19 +2285,32 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 f.pivot.copy(bhNow).add(f.toOffset);
                 return false;
             }
-            const kept = bhView && bhView.follow === s.follow && camera.position.equals(bhView.camera) && controls.target.equals(bhView.target);
+            const same = bhView && bhView.follow === s.follow;
+            const kept = same && camera.position.equals(bhView.camera) && controls.target.equals(bhView.target);
+            if (!same) bhSince = now;
             if (kept) camera.position.copy(bhView.at);
             else camera.position.sub(controls.target);
+            const axis = bh.upAxis(i);
+            if (axis) toLocal.setFromUnitVectors(axis, camera.up);
+            else toLocal.identity();
+            fromLocal.copy(toLocal).invert();
+            camera.position.applyQuaternion(toLocal);
             controls.target.set(0, 0, 0);
             return true;
         };
         // After controls.update: the camera's place from the hole kept (a
         // pan's moved target let go: it's back on the hole next frame), the
         // camera turned to the hole, back to ly from the Sun
-        const leaveHoleFrame = () => {
+        const leaveHoleFrame = (now) => {
+            // The view's up: the frame's (a fed disc's axis), blended in from
+            // north's on arrival
+            const w = THREE.MathUtils.smoothstep(now - bhSince, 0, BH_ROLL_MS);
+            lookUp.copy(camera.up).applyQuaternion(toLocal).lerp(camera.up, w).normalize();
+            lookMatrix.lookAt(camera.position, holeHere, lookUp);
+            camera.quaternion.setFromRotationMatrix(lookMatrix).premultiply(fromLocal);
+            camera.position.applyQuaternion(fromLocal);
+            controls.target.applyQuaternion(fromLocal);
             const at = camera.position.clone().sub(controls.target);
-            lookMatrix.lookAt(camera.position, holeHere, camera.up);
-            camera.quaternion.setFromRotationMatrix(lookMatrix);
             camera.position.add(bhNow);
             controls.target.add(bhNow);
             bhView = { follow: s.follow, at, camera: camera.position.clone(), target: controls.target.clone() };
@@ -2347,7 +2369,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let bhWasShown = null;
         const animate = (now) => {
             advanceClock(now);
-            const inHoleFrame = enterHoleFrame();
+            const inHoleFrame = enterHoleFrame(now);
             updateFlight(now);
             targetBefore.copy(controls.target);
             controls.update();
@@ -2358,7 +2380,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             // hole's frame, as it would be from the Sun.
             const panTolerance = 1e-6 * camera.position.distanceTo(controls.target) + 1e-12 * (inHoleFrame ? bhNow : controls.target).length();
             const panned = targetBefore.distanceTo(controls.target) > panTolerance;
-            if (inHoleFrame) leaveHoleFrame();
+            if (inHoleFrame) leaveHoleFrame(now);
             if (!s.flight && s.focused && panned) {
                 s.focused = false;
                 s.follow = { id: null, moveTarget: true };
@@ -3465,7 +3487,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     </label>
                     <label
                         className="universe-3d-checkbox"
-                        title="Gaia BH1, BH2 and BH3: dormant black holes found from the wobble of the star going round each, on their measured orbits, moving with the clock; fly close to see the black hole's shadow and the light bent round it"
+                        title="Gaia BH1, BH2 and BH3, dormant black holes found from the wobble of the star going round each, and Cygnus X-1 and V404 Cygni, fed by theirs, with discs and spin: on their measured orbits, moving with the clock; fly close to see the black hole's shadow and the light bent round it"
                     >
                         <input
                             type="checkbox"
@@ -3473,7 +3495,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                             onChange={(e) => setShowBlackHoles(e.target.checked)}
                         />
                         <span className="universe-3d-swatch" style={{ background: '#000', border: '2px solid #c4b5fd' }} />
-                        Black holes (Gaia BH1-3)
+                        Stellar black holes
                     </label>
                     <label
                         className={`universe-3d-checkbox ${showGalaxy ? '' : 'disabled'}`}

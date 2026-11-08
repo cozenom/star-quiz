@@ -1,8 +1,11 @@
-// Stellar black holes: Gaia BH1, BH2 and BH3 (black_holes.json, from
+// Stellar black holes (black_holes.json, from
 // Star_Data/scripts/build_black_holes.py, which checks each orbit against
-// the star's measured radial velocities). Each is a dormant black hole with
-// a star going round it, found from the star's wobble in Gaia's
-// measurements, here on its published orbit, moving with the clock:
+// the star's measured radial velocities, conjunction or mass function),
+// each with a star going round it on its published orbit, moving with the
+// clock. Dormant (kind 'dormant': Gaia BH1-3, found from the star's wobble
+// in Gaia's measurements) or fed (kind 'fed', X-ray binaries: Cygnus X-1,
+// V404 Cygni: the star's gas spiralling into a disc round the spinning
+// black hole). Each:
 //   - from afar: the star, as a star (the star layer, at the system's
 //     place), the system named after its black hole
 //   - close up: its own scale layer (AU, origin at the centre of mass of
@@ -16,7 +19,12 @@
 // blackHoleLens): this layer is drawn before it, so the star's light is bent
 // too. The pass treats what it bends as far off, which holds wherever the
 // bending shows: the star is AU away, the camera then within a few
-// thousand km of the hole.
+// thousand km of the hole. A fed system's hole is traced with its spin, and
+// its disc is the pass's too (a thin disc in its equatorial plane, the spin
+// along the orbit's axis), at the build's temperatures; its star here is
+// the Roche surface it fills or nearly fills (its shape in the black hole's
+// pull, darker where its surface gravity is weaker: T ~ g^beta), and a
+// line marks the radio jet's direction.
 // Each system stays where Gaia measured it (its drift across the sky left
 // out, as the stars'), seen from Earth at the clock's date.
 //
@@ -27,7 +35,7 @@
 // the lens pass and the close-up's names take that.
 
 import * as THREE from 'three';
-import { B_CRIT, deflection } from './blackHoleLens';
+import { B_CRIT, deflection, discLook, discTable } from './blackHoleLens';
 import { createLayer } from './layers3d';
 import { AU_PER_PC, eccentricAnomaly } from './galacticCentre3d';
 import { makeStarDiscMesh } from './starDisc';
@@ -76,12 +84,33 @@ const LENS_REACH_RG = 3e6;
 // the hole, this far above its orbit's plane (deg), on Earth's side;
 // close to the hole, this many rg from it, in the orbit's plane, opposite
 // where the star comes closest (so it passes right behind the hole then:
-// its light bent into a ring)
+// its light bent into a ring); a fed one's this far above the disc (deg),
+// on Earth's side, so its face shows, bent over the hole, the star this
+// far off the view's centre (deg)
 const VIEW_SCALE = 2.2;
 const VIEW_ELEVATION_DEG = 50;
 const HOLE_VIEW_RG = 50;
+const FED_HOLE_ELEVATION_DEG = 12;
+const FED_HOLE_STAR_OFF_DEG = 55;
 // How close the camera may get (rg)
 const MIN_RG = 20;
+// The jet's line (ours: a key colour), each way from the hole this many
+// times the separation, fading to nothing at its ends (a direction, not the
+// jet's length: it runs tens of AU in radio); it shows from outside the
+// system (the camera this many separations from the hole: within it, it
+// would cut the view in two)
+export const BH_JET_COLOR = 0x67e8f9;
+const JET_LENGTH = 0.75;
+const JET_FADE = [0.6, 1.2];
+const JET_OPACITY = 0.45;
+// The fed star's surface: limb darkening (as starDisc's, linear), and the
+// mesh's resolution
+const LIMB_DARKENING = 0.6;
+const ROCHE_SEGMENTS = [96, 48];
+// Green (um): the gravity darkening's brightness, as the eye's
+const V_UM = 0.549;
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 // The star's place from the black hole (AU, scene frame) at year t; out:
 // Vector3
@@ -146,8 +175,10 @@ function directImage(camera, hole, source, rgAu, out) {
 // One line for hover: "Gaia BH1 · black hole of 9.6 Suns with a Sun-like
 // star, 1,561 ly"
 const firstLower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+// "a Sun-like star", "an orange subgiant"
+const withArticle = (s) => `${/^[aeiou]/i.test(s) ? 'an' : 'a'} ${firstLower(s)}`;
 export function bhLabel(sys) {
-    return `${sys.name} · black hole of ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns with a ${firstLower(sys.star.type)}, ${Math.round(sys.distance_ly).toLocaleString()} ly`;
+    return `${sys.name} · black hole of ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns with ${withArticle(sys.star.type)}, ${Math.round(sys.distance_ly).toLocaleString()} ly`;
 }
 
 // Camera views (ly from the Sun), looking at the black hole at year t:
@@ -162,13 +193,25 @@ export function bhPose(sys, view, t) {
     const rgAu = sys.black_hole.rg_au;
     let from;
     let au;
+    const toEarth = new THREE.Vector3(...sys.sky.away).negate();
+    if (n.dot(toEarth) < 0) n.negate();
     if (view === 'hole') {
         from = p.clone().negate();
+        if (sys.kind === 'fed') {
+            // Above the disc (its axis on Earth's side is the view's up there:
+            // Universe3D's hole frame), the star off to one side: the hole
+            // against dark sky (behind it, the star would fill much of the
+            // sky, as bright as the disc's outer parts)
+            const s = bhSeparation(sys, t).normalize();
+            const w = n.clone().cross(s);
+            const e = THREE.MathUtils.degToRad(FED_HOLE_ELEVATION_DEG);
+            const beta = Math.acos(-Math.cos(THREE.MathUtils.degToRad(FED_HOLE_STAR_OFF_DEG)) / Math.cos(e));
+            from = s.multiplyScalar(Math.cos(beta)).addScaledVector(w, Math.sin(beta))
+                .multiplyScalar(Math.cos(e)).addScaledVector(n, Math.sin(e));
+        }
         au = HOLE_VIEW_RG * rgAu;
     } else {
         // Earth's direction laid in the orbit's plane, then tilted up
-        const toEarth = new THREE.Vector3(...sys.sky.away).negate();
-        if (n.dot(toEarth) < 0) n.negate();
         const inPlane = toEarth.clone().addScaledVector(n, -toEarth.dot(n));
         if (inPlane.lengthSq() < 1e-6) inPlane.copy(p);
         inPlane.normalize();
@@ -185,7 +228,11 @@ export function bhPose(sys, view, t) {
 
 // Search entries (type 'bh', index: into data.systems; view: 'system' or
 // 'hole'; id: unique)
-const BH_TERMS = ['black hole', 'stellar black hole', 'dormant black hole', 'nearest black hole', 'Gaia black hole'];
+const BH_TERMS = ['black hole', 'stellar black hole'];
+const KIND_TERMS = {
+    dormant: ['dormant black hole', 'nearest black hole', 'Gaia black hole'],
+    fed: ['X-ray binary', 'accretion disc', 'accretion disk', 'spinning black hole', 'microquasar'],
+};
 export function bhSearchItems(data, normalize) {
     return data.systems.flatMap((sys, i) => [{
         type: 'bh',
@@ -193,8 +240,8 @@ export function bhSearchItems(data, normalize) {
         index: i,
         view: 'system',
         label: sys.name,
-        sublabel: `Black hole · ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns with a ${firstLower(sys.star.type)}, ${Math.round(sys.distance_ly).toLocaleString()} ly`,
-        terms: [...new Set([sys.name, ...sys.aka, ...BH_TERMS])].map(normalize),
+        sublabel: `${sys.kind === 'fed' ? 'Fed black hole' : 'Black hole'} · ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns with ${withArticle(sys.star.type)}, ${Math.round(sys.distance_ly).toLocaleString()} ly`,
+        terms: [...new Set([sys.name, ...sys.aka, ...BH_TERMS, ...KIND_TERMS[sys.kind] ?? []])].map(normalize),
         sortKey: -6,
     }, {
         type: 'bh',
@@ -202,11 +249,105 @@ export function bhSearchItems(data, normalize) {
         index: i,
         view: 'hole',
         label: `${sys.name} close up`,
-        sublabel: 'Right by the black hole: its shadow, the light bent round it',
-        terms: [`${sys.name} close up`, `${sys.name} shadow`, `${sys.name} black hole`].map(normalize),
+        sublabel: sys.kind === 'fed' ? 'Right by the spinning black hole: its shadow, its disc and the light bent round it' : 'Right by the black hole: its shadow, the light bent round it',
+        terms: [`${sys.name} close up`, `${sys.name} shadow`, `${sys.name} black hole`, ...(sys.kind === 'fed' ? [`${sys.name} disc`, `${sys.name} accretion disc`] : [])].map(normalize),
         sortKey: -5,
     }]);
 }
+
+// The Roche surface a fed system's star fills (or nearly): Kopal's
+// potential about the star (separations; the black hole at x = 1, the
+// orbit's axis z), q the black hole's mass over the star's (synchronous
+// rotation, as the build's)
+const rochePotential = (x, y, z, q) => 1 / Math.hypot(x, y, z) + q * (1 / Math.hypot(x - 1, y, z) - x) + (1 + q) / 2 * (x * x + y * y);
+const planckV = (t) => 1 / Math.expm1(Math.min(14387.77 / (V_UM * t), 700));
+// A unit-separation mesh of it (x towards the hole, z the orbit's axis),
+// its normals from the potential's gradient, and each vertex's brightness
+// (attribute shade): gravity darkening, T = teff (g / its mean)^beta, as the
+// eye sees it (the blackbody at 549 nm)
+function rocheGeometry({ q, potential, x_l1: xl1 }, beta, teff) {
+    const geometry = new THREE.SphereGeometry(1, ...ROCHE_SEGMENTS);
+    const pos = geometry.attributes.position;
+    const n = pos.count;
+    const normals = new Float32Array(n * 3);
+    const g = new Float32Array(n);
+    const weight = new Float32Array(n);
+    const d = new THREE.Vector3();
+    const step = xl1 / 400;
+    const eps = 1e-6;
+    for (let i = 0; i < n; i++) {
+        d.fromBufferAttribute(pos, i).normalize();
+        const pot = (r) => rochePotential(d.x * r, d.y * r, d.z * r, q);
+        // Outward to where the potential falls to the surface's (or, filling
+        // the lobe, stops falling: its edge), then bisect
+        let lo = step, hi = step, prev = pot(step);
+        let crossed = false;
+        for (let r = 2 * step; r <= xl1 * 1.0005; r += step) {
+            const p = pot(r);
+            if (p < potential) { hi = r; crossed = true; break; }
+            if (p > prev) break;
+            prev = p;
+            lo = hi = r;
+        }
+        if (crossed) {
+            for (let k = 0; k < 40; k++) {
+                const mid = 0.5 * (lo + hi);
+                if (pot(mid) > potential) lo = mid; else hi = mid;
+            }
+        }
+        const r = 0.5 * (lo + hi);
+        const x = d.x * r, y = d.y * r, z = d.z * r;
+        pos.setXYZ(i, x, y, z);
+        // The gradient: outward normal (the potential falls outward), and g
+        const gx = (rochePotential(x + eps, y, z, q) - rochePotential(x - eps, y, z, q)) / (2 * eps);
+        const gy = (rochePotential(x, y + eps, z, q) - rochePotential(x, y - eps, z, q)) / (2 * eps);
+        const gz = (rochePotential(x, y, z + eps, q) - rochePotential(x, y, z - eps, q)) / (2 * eps);
+        const gl = Math.hypot(gx, gy, gz) || 1;
+        normals.set([-gx / gl, -gy / gl, -gz / gl], 3 * i);
+        g[i] = gl;
+        // The sphere's vertices are even in latitude (about its y) and
+        // longitude: area ~ r^2 cos(latitude)
+        weight[i] = r * r * Math.sqrt(Math.max(1 - d.y * d.y, 0));
+    }
+    let gSum = 0, wSum = 0;
+    for (let i = 0; i < n; i++) {
+        gSum += g[i] * weight[i];
+        wSum += weight[i];
+    }
+    const gMean = gSum / wSum;
+    const shade = new Float32Array(n);
+    // At L1 (filling the lobe) g is 0: the coolest point, not black
+    for (let i = 0; i < n; i++) shade[i] = planckV(teff * Math.max(g[i] / gMean, 0.05) ** beta) / planckV(teff);
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute('shade', new THREE.BufferAttribute(shade, 1));
+    geometry.computeBoundingSphere();
+    return geometry;
+}
+const rocheVertexShader = /* glsl */ `
+    attribute float shade;
+    varying vec3 vNormal;
+    varying vec3 vView;
+    varying float vShade;
+    void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalize(normalMatrix * normal);
+        vView = normalize(-mvPosition.xyz);
+        vShade = shade;
+        gl_Position = projectionMatrix * mvPosition;
+    }
+`;
+// As starDisc's, its brightness times the vertex's
+const rocheFragmentShader = /* glsl */ `
+    uniform vec3 uColor;
+    varying vec3 vNormal;
+    varying vec3 vView;
+    varying float vShade;
+    void main() {
+        float mu = clamp(dot(normalize(vNormal), normalize(vView)), 0.0, 1.0);
+        vec3 color = pow(uColor, vec3(2.2)) * vShade * (1.0 - ${LIMB_DARKENING.toFixed(2)} * (1.0 - mu));
+        gl_FragColor = vec4(color, 1.0);
+    }
+`;
 
 const markerVertexShader = /* glsl */ `
     uniform float uSize;
@@ -272,6 +413,56 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
     const disc = makeStarDiscMesh();
     disc.visible = false;
     layer.scene.add(disc);
+    // Fed systems: the star's Roche surface (made when first shown), the
+    // disc's temperatures for the lens pass (and its brightness against the
+    // star's surface), the spin's (and the orbit's) axis
+    const fed = systems.map((sys, i) => (sys.kind !== 'fed' ? null : {
+        mesh: null,
+        axis: new THREE.Vector3(...sys.orbit.normal),
+        // The axis on Earth's side: the close-up's up (bhPose)
+        up: new THREE.Vector3(...sys.orbit.normal).multiplyScalar(
+            new THREE.Vector3(...sys.orbit.normal).dot(new THREE.Vector3(...sys.sky.away)) > 0 ? -1 : 1),
+        disc: {
+            ...discTable(sys.disc),
+            rIn: sys.disc.r_in_rg,
+            rOut: sys.disc.r_out_rg,
+            rIsco: sys.black_hole.r_isco_rg,
+            ...discLook(sys.star.teff_k, colours[i]),
+        },
+    }));
+    const rocheMesh = (i) => {
+        const f = fed[i];
+        if (!f.mesh) {
+            const sys = systems[i];
+            const material = new THREE.ShaderMaterial({
+                uniforms: { uColor: { value: new THREE.Color().fromArray(colours[i]) } },
+                vertexShader: rocheVertexShader,
+                fragmentShader: rocheFragmentShader,
+            });
+            f.mesh = new THREE.Mesh(rocheGeometry(sys.star.roche, sys.star.gravity_darkening, sys.star.teff_k), material);
+            f.mesh.matrixAutoUpdate = false;
+            f.mesh.frustumCulled = false;
+            f.mesh.visible = false;
+            layer.scene.add(f.mesh);
+        }
+        return f.mesh;
+    };
+    // The jet's line: both ways along the axis, placed by its matrix
+    const jetGeometry = new THREE.BufferGeometry();
+    jetGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, -1]), 3));
+    const jetRgb = new THREE.Color().setHex(BH_JET_COLOR).toArray();
+    jetGeometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array([
+        ...jetRgb, 1, ...jetRgb, 0, ...jetRgb, 1, ...jetRgb, 0]), 4));
+    const jet = new THREE.LineSegments(jetGeometry, new THREE.LineBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0, depthWrite: false,
+    }));
+    jet.matrixAutoUpdate = false;
+    jet.frustumCulled = false;
+    jet.visible = false;
+    layer.scene.add(jet);
+    const jetE1 = new THREE.Vector3(), jetE2 = new THREE.Vector3();
+    const rocheX = new THREE.Vector3(), rocheY = new THREE.Vector3(), scaleBy = new THREE.Vector3();
+    const lensKerr = { spin: 0, axis: null, star: { at: new THREE.Vector3(), radiusAu: 0 }, disc: null };
     // Each system's orbit line, in its plane (x towards periastron), placed
     // on the hole by its matrix
     const orbitLines = systems.map((sys, i) => {
@@ -317,6 +508,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
     let active = -1;
     let closeUp = 0;
     let shadowPx = 0;
+    let separation = 0;                   // AU, this frame
     const hole = new THREE.Vector3();     // AU from the active system's centre of mass, this frame
     const star = new THREE.Vector3();
     const cameraAu = new THREE.Vector3();
@@ -378,22 +570,56 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
                 disc.material.uniforms.uColor.value.fromArray(colours[active]);
                 disc.scale.setScalar(sys.star.radius_au);
                 orbitLines.forEach((line, i) => { line.visible = i === active; });
+                fed.forEach((f, i) => { if (f?.mesh && i !== active) f.mesh.visible = false; });
             }
             star.toArray(starPositions);
             starPoints.geometry.attributes.position.needsUpdate = true;
             su.uMagOffset.value = FADE_MAG * (1 - closeUp);
             const toHole = Math.max(cameraAu.distanceTo(hole), 1e-12);
             const toStar = Math.max(cameraAu.distanceTo(star), 1e-12);
-            // The star's disc, once a pixel or so
-            disc.position.copy(star);
-            disc.visible = sys.star.radius_au * focal / toStar > DISC_MIN_PX;
+            separation = hole.distanceTo(star);
+            const f = fed[active];
+            // The star: its disc (a fed one's Roche surface), once a pixel or
+            // so. starOut: its surface's farthest from its centre (AU)
+            let starOut = sys.star.radius_au;
+            let starPx;
+            if (f) {
+                const mesh = rocheMesh(active);
+                const roche = sys.star.roche;
+                starOut = roche.x_l1 * separation;
+                starPx = roche.r_vol * separation * focal / toStar;
+                // x towards the hole, z the orbit's axis
+                rocheX.subVectors(hole, star);
+                rocheX.addScaledVector(f.axis, -rocheX.dot(f.axis)).normalize();
+                rocheY.crossVectors(f.axis, rocheX);
+                mesh.matrix.makeBasis(rocheX, rocheY, f.axis).scale(scaleBy.setScalar(separation)).setPosition(star);
+                mesh.matrixWorldNeedsUpdate = true;
+                mesh.visible = starPx > DISC_MIN_PX;
+                disc.visible = false;
+            } else {
+                disc.position.copy(star);
+                starPx = sys.star.radius_au * focal / toStar;
+                disc.visible = starPx > DISC_MIN_PX;
+            }
             // Its sprite, small and over the disc where the light is bent
-            // (the Einstein ring's radius, sqrt(4 rg / d) far off)
+            // (the Einstein ring's radius, sqrt(4 rg / d) far off); behind
+            // the star's disc once that's a few px (a fed star seen from
+            // its hole fills much of the sky)
             const ringPx = 2 * Math.sqrt(4 * sys.black_hole.rg_au / toHole) * focal;
             const lensed = THREE.MathUtils.smoothstep(ringPx, ...LENSED_RING_PX);
             su.uMaxSize.value = THREE.MathUtils.lerp(spriteMaxPx, SPRITE_LENSED_PX, lensed);
             su.uGlowMax.value = THREE.MathUtils.lerp(1, 0.001, lensed);
-            starPoints.material.depthTest = lensed < 0.5;
+            starPoints.material.depthTest = lensed < 0.5 || starPx > 2;
+            // The jet's line, on the hole, gone close to it
+            if (f) {
+                jetE1.crossVectors(f.axis, Math.abs(f.axis.y) < 0.9 ? Y_AXIS : X_AXIS).normalize();
+                jetE2.crossVectors(f.axis, jetE1);
+                jet.matrix.makeBasis(jetE1, jetE2, f.axis).scale(scaleBy.setScalar(JET_LENGTH * separation)).setPosition(hole);
+                jet.matrixWorldNeedsUpdate = true;
+                jet.material.opacity = JET_OPACITY * closeUp * (opts.orbits || opts.selected === active ? 1 : 0)
+                    * THREE.MathUtils.smoothstep(toHole / separation, ...JET_FADE);
+            }
+            jet.visible = Boolean(f) && jet.material.opacity > 0.003;
             // The orbit line, on the hole
             const line = orbitLines[active];
             const apo = sys.orbit.apoapsis_au;
@@ -411,15 +637,29 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             markerGeometry.attributes.position.needsUpdate = true;
             markerMaterial.uniforms.uFade.value = closeUp * (1 - THREE.MathUtils.smoothstep(shadowPx, ...MARKER_SHADOW_PX));
             // Near plane: a fraction of the way to the nearest thing
-            const closest = Math.min(toHole - sys.black_hole.shadow_km / KM_PER_AU, toStar - sys.star.radius_au);
+            const closest = Math.min(toHole - sys.black_hole.shadow_km / KM_PER_AU, toStar - starOut);
             layer.near = Math.max(closest * NEAR_FRACTION, 1e-9);
-            layer.far = toCentre + 2 * apo + 1;
+            layer.far = toCentre + 2 * apo + JET_LENGTH * separation + 1;
         },
 
-        // The active hole for the lens pass ({at: AU in this layer, rgAu}),
-        // or null
-        lensTarget: () => (active >= 0 && layer.visible ? { at: hole, rgAu: systems[active].black_hole.rg_au } : null),
+        // The active hole for the lens pass ({at: AU in this layer, rgAu,
+        // kerr}: utils/blackHoleLens update's other), or null
+        lensTarget() {
+            if (active < 0 || !layer.visible) return null;
+            const sys = systems[active];
+            const f = fed[active];
+            if (!f) return { at: hole, rgAu: sys.black_hole.rg_au, kerr: null };
+            lensKerr.spin = sys.black_hole.spin;
+            lensKerr.axis = f.axis;
+            lensKerr.star.at.copy(star);
+            lensKerr.star.radiusAu = sys.star.roche.r_vol * separation;
+            lensKerr.disc = f.disc;
+            return { at: hole, rgAu: sys.black_hole.rg_au, kerr: lensKerr };
+        },
 
+        // The view's up riding along with system i's hole: a fed one's disc
+        // axis (Earth's side), or null (north stays up)
+        upAxis: (i) => fed[i]?.up ?? null,
         // Where system i's black hole is at year t, in ly from the Sun
         // (doubles); out: Vector3
         holeLy: (i, t, out = new THREE.Vector3()) => bhHoleAu(systems[i], t, out).divideScalar(AU_PER_LY).add(centres[i]),
@@ -507,6 +747,14 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             });
             markerGeometry.dispose();
             markerMaterial.dispose();
+            fed.forEach((f) => {
+                if (!f) return;
+                f.disc.texture.dispose();
+                f.mesh?.geometry.dispose();
+                f.mesh?.material.dispose();
+            });
+            jetGeometry.dispose();
+            jet.material.dispose();
         },
     };
 }
