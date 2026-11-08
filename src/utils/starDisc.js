@@ -49,18 +49,25 @@ const discFragmentShader = `
 
 export const radiusToLy = (radiusSun) => radiusSun * SUN_RADIUS_KM / KM_PER_AU / AU_PER_LY;
 
+// A star's disc: a unit sphere, limb-darkened, its colour uColor (the star
+// shader's sRGB tint); scale it to the radius (also utils/blackHoles3d)
+export function makeStarDiscMesh() {
+    const material = new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: new THREE.Color() } },
+        vertexShader: discVertexShader,
+        fragmentShader: discFragmentShader,
+    });
+    return new THREE.Mesh(new THREE.SphereGeometry(1, 64, 32), material);
+}
+
 // starBuffers: from buildStarBuffers (positions, colors, radius)
 export function createStarDisc(starBuffers) {
     const origin = new THREE.Vector3();
     const layer = createLayer({ name: 'star disc', unit: 1 / AU_PER_LY, origin: () => origin, near: 1e-6, far: 1 });
     layer.visible = false;
 
-    const material = new THREE.ShaderMaterial({
-        uniforms: { uColor: { value: new THREE.Color() } },
-        vertexShader: discVertexShader,
-        fragmentShader: discFragmentShader,
-    });
-    const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 32), material);
+    const sphere = makeStarDiscMesh();
+    const { material } = sphere;
     layer.scene.add(sphere);
 
     const { positions, colors, radius, count } = starBuffers;

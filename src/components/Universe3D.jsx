@@ -19,6 +19,7 @@ import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars'
 import { DUST_MAG_PER_TAU, createDustMap, dustMapSource } from '../utils/dustMap';
 import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars, dwarfFloor } from '../utils/landmarks3d';
 import { GC_GLARE_SHARE, GC_STAR_GLOW_MAX, GC_STAR_MAX_PX, buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
+import { bhLabel, bhPose, bhSearchItems, buildBlackHoles, createBlackHoleLayer } from '../utils/blackHoles3d';
 import {
     AU_PER_LY,
     KM_PER_AU,
@@ -40,6 +41,7 @@ import {
 } from '../utils/universe3d';
 import { RING_FEATURES, RING_FEATURES_BY_ID, ringLabelKm, ringPole, ringScaleKm, ringSubtitle } from '../utils/rings';
 import GalaxyInfoCard, { ClusterInfoCard, GalacticCentreLegend, GalaxyLegend, GcObjectInfoCard, MaserInfoCard } from './GalaxyInfoCard';
+import BlackHoleInfoCard, { BlackHoleLegend } from './BlackHoleInfoCard';
 import MapLegend from './MapLegend';
 import PlanetInfoCard from './PlanetInfoCard';
 import RegionInfoCard from './RegionInfoCard';
@@ -176,6 +178,7 @@ const LINE_OPTIONS = [
     { kind: 'maserRanges', label: 'Maser distance ranges', needs: 'masers', title: 'The faint line through each measured maser: its distance\'s uncertainty' },
     { kind: 'galacticAxis', label: 'Galactic axis', needs: 'galaxy', title: 'A line through the galaxy\'s centre, square to its disc, out to galactic north and south' },
     { kind: 'gcOrbits', label: 'Orbits round Sgr A*', needs: 'galaxy', title: 'In the Galactic Centre close-up: the measured orbits of the stars and dusty clouds round the black hole' },
+    { kind: 'bhOrbits', label: 'Orbits round black holes', title: 'Close to Gaia BH1, BH2 and BH3: each star\'s measured orbit round its black hole' },
 ];
 
 // The galactic poles on the sky (J2000, as Hipparcos defines them), in
@@ -271,6 +274,23 @@ const gcStarVertexShader = `
         vSize = gl_PointSize;
     }
 `;
+
+// The stellar black holes' stars (utils/blackHoles3d): dimmed by
+// uMagOffset (each Points' own), as the far star and the close-up's hand
+// over to each other
+const offsetStarShader = {
+    vertexShader: `
+        attribute float absMag;
+        attribute vec3 color;
+        uniform float uMagOffset;
+        ${STAR_VERTEX_GLSL}
+
+        void main() {
+            placeStar(position, color, absMag + uMagOffset);
+        }
+    `,
+    uniforms: {},
+};
 
 // The Gaia tiers and RR Lyrae (utils/farStars) as they are in their files:
 // int16 positions and uint8 magnitude and B-V codes, which the GPU reads as
@@ -501,6 +521,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         maserRanges: true,
         galacticAxis: true,
         gcOrbits: true,
+        bhOrbits: true,
     });
     const linesOn = (kind) => showLines && lineKinds[kind];
     const [showLabels, setShowLabels] = useState(true);
@@ -601,6 +622,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const [selectedGc, setSelectedGc] = useState(null);
     const [gcData, setGcData] = useState(null);
     const [gcShown, setGcShown] = useState(false);
+    // The stellar black holes (black_holes.json, fetched with galaxy.json):
+    // shown?, a system's card (its index), the data, and the close-up on
+    // screen (its index, for the legend; null: none)
+    const [showBlackHoles, setShowBlackHoles] = useState(true);
+    const [selectedBh, setSelectedBh] = useState(null);
+    const [bhData, setBhData] = useState(null);
+    const [bhShown, setBhShown] = useState(null);
     const galaxyDataRef = useRef(null);
     const loadGalaxyData = () => {
         if (!galaxyDataRef.current) {
@@ -618,10 +646,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 console.error('Error loading the Galactic Centre close-up:', error);
                 return null;
             });
-            galaxyDataRef.current = Promise.all([get('galaxy.json'), landmarks, centre])
-                .then(([data, marks, gc]) => {
+            // And the stellar black holes
+            const holes = get('black_holes.json').catch((error) => {
+                console.error('Error loading the black holes:', error);
+                return null;
+            });
+            galaxyDataRef.current = Promise.all([get('galaxy.json'), landmarks, centre, holes])
+                .then(([data, marks, gc, bh]) => {
                     data.landmarks = marks;
                     data.gc = gc;
+                    data.bh = bh;
+                    setBhData(bh);
                     setGalaxyCards(data.cards);
                     setGalaxyMasers(data.masers);
                     setLandmarks(marks);
@@ -742,8 +777,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 };
             }) : [])),
             ...(gcData ? gcSearchItems(gcData, normalizeSearchText) : []),
+            ...(bhData ? bhSearchItems(bhData, normalizeSearchText) : []),
         ] : []),
-        [constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies, galaxyMasers, landmarks, gcData]
+        [constellationData, starBuffers, lineStarInfo, planetFacts, moonsData, smallBodies, galaxyMasers, landmarks, gcData, bhData]
     );
 
     const selectedHips = useMemo(
@@ -751,7 +787,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, showGc, showRadioFlow, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster, selectedGc };
+    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, showGc, showRadioFlow, showBlackHoles, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster, selectedGc, selectedBh };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -761,6 +797,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         setSelectedMaser(null);
         setSelectedCluster(null);
         setSelectedGc(null);
+        setSelectedBh(null);
         setSelectedStar(index);
     };
     const selectBody = (id) => {
@@ -771,6 +808,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         setSelectedMaser(null);
         setSelectedCluster(null);
         setSelectedGc(null);
+        setSelectedBh(null);
         setSelectedBody(id);
     };
 
@@ -818,7 +856,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         skyLayer.visible = false;
         // The Galactic Centre close-up (AU, at Sgr A*), filled once its data is in
         const gcLayer = createGalacticCentreLayer();
-        const layers = [skyLayer, starLayer, gcLayer.layer, starDisc.layer, solarLayer];
+        // The stellar black holes' close-up (AU, at the nearest one's centre
+        // of mass), before the lens pass: its star's light is bent too
+        const bhLayer = createBlackHoleLayer();
+        const layers = [skyLayer, starLayer, bhLayer.layer, gcLayer.layer, starDisc.layer, solarLayer];
         const scene = starLayer.scene;
         const starCamera = starLayer.camera;  // for picking and labels
         const solarCamera = solarLayer.camera;
@@ -1000,7 +1041,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             });
         };
         // Every star Points, for the settings they share
-        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints(), gc?.starPoints].filter(Boolean);
+        const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints(), gc?.starPoints,
+            ...(bh ? bh.farStars() : [])].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -1054,6 +1096,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // use the star shader with their own camera uniforms, in AU
         let gc = null;
         const gcStarCamera = makeStarCamera();
+        // The stellar black holes (utils/blackHoles3d): their close-up's star
+        // likewise
+        let bh = null;
+        const bhStarCamera = makeStarCamera();
         let disposed = false;
         const loadClusterStars = (kind) => {
             const g = clusterData[kind];
@@ -1172,6 +1218,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         .catch(error => console.error('Error loading the cluster\'s stars:', error));
                 }
             }
+            if (data.bh) {
+                bh = buildBlackHoles(bhLayer, data.bh, pixelRatio, {
+                    makeStars: (p, c, m) => makeStarPoints(p, c, m, pixelRatio, bhStarCamera, SPRITE_MAX_SIZE_PX, offsetStarShader),
+                    makeFarStars: (p, c, m) => makeStarPoints(p, c, m, pixelRatio, starCameraUniforms, SPRITE_MAX_SIZE_PX, offsetStarShader),
+                    farScene: scene,
+                    starCamera: bhStarCamera,
+                    bvToColor,
+                });
+                s.bh = bh;
+                applyBloom();
+            }
         }).catch(error => console.error('Error loading the galaxy model:', error));
 
         const sun = makeStarPoints(
@@ -1204,11 +1261,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // glow by their light (GLARE_MAG), except on touch devices (lite).
         const composer = new EffectComposer(renderer);
         const layerPasses = addLayerPasses(composer, layers);
-        // Sgr A*'s lensing of the background (utils/blackHoleLens): after the
-        // sky and star layers, before the close-up's (whose stars are lensed
-        // one by one in their shader)
+        // A black hole's lensing of the background (utils/blackHoleLens), Sgr
+        // A*'s or a stellar one's: after the sky, star and stellar black
+        // holes' layers, before the Galactic Centre close-up's (whose stars
+        // are lensed one by one in their shader)
         const lens = createLensPass();
-        composer.insertPass(lens.pass, layers.indexOf(starLayer) + 1);
+        composer.insertPass(lens.pass, layers.indexOf(bhLayer.layer) + 1);
         const glarePass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, GLARE_THRESHOLD);
         glarePass.materialHighPassFilter.fragmentShader = glareHighPassShader;
         composer.addPass(glarePass);
@@ -1222,8 +1280,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             bodyPose,
             ringPose,
             regionPose,
-            // The body the view rides along with as time runs (see setFollow)
-            follow: { id: home ? 'Earth' : null, moveTarget: true },
+            // The body the view rides along with as time runs (see setFollow;
+            // bh: a stellar black hole's index instead, see setFollowBh)
+            follow: { id: home ? 'Earth' : null, moveTarget: true, bh: null },
             selectedBodyId: null,
         };
         // As time runs, keep the view with a moving body: the camera moves
@@ -1231,7 +1290,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // (moveTarget). Looking at stars from Earth, only the camera rides
         // along with Earth. id null: nothing moves.
         s.setFollow = (id, moveTarget = true) => {
-            s.follow = { id: id && solar?.byId.has(id) ? id : null, moveTarget };
+            s.follow = { id: id && solar?.byId.has(id) ? id : null, moveTarget, bh: null };
+            s.focused = true;
+        };
+        // Ride along with a stellar black hole (it swings round its system's
+        // centre of mass), looking at it (see enterHoleFrame)
+        s.setFollowBh = (index) => {
+            s.follow = { id: null, moveTarget: true, bh: index };
             s.focused = true;
         };
         // Centred on something (the footer names it); panning away clears it
@@ -1247,6 +1312,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             });
             // The Galactic Centre close-up's crowd of very bright stars: less glare
             if (gc) gc.starMaterials().forEach((m) => { m.uniforms.uGlare.value = peak * GC_GLARE_SHARE; });
+            if (bh) bh.starMaterials().forEach((m) => { m.uniforms.uGlare.value = peak; });
             solar?.setGlare(peak, GLARE_MAG);
         };
         applyBloom();
@@ -1496,6 +1562,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             return gc.pick(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx);
         };
 
+        // A stellar black hole's system under the point (its hole or star
+        // close up, else its place while named), or null
+        const pickBh = (clientX, clientY, radiusPx) => {
+            if (!bh) return null;
+            const rect = renderer.domElement.getBoundingClientRect();
+            syncLayerCamera(starLayer, camera);
+            return bh.pick(starCamera, rect.width, rect.height, clientX - rect.left, clientY - rect.top, radiusPx, yearOf(clockRef.current.time));
+        };
+
         // Planets win over stars: they're drawn on top. Cloud dots come
         // between, for hovering (withCloud): they have no card to open.
         // The galaxy's masers and star clusters come next after planets
@@ -1506,6 +1581,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             if (id !== null) return { type: 'body', id };
             const gcIndex = pickGc(clientX, clientY, Math.min(radiusPx, 12));
             if (gcIndex !== null) return { type: 'gc', index: gcIndex };
+            const bhIndex = pickBh(clientX, clientY, Math.min(radiusPx, 12));
+            if (bhIndex !== null) return { type: 'bh', index: bhIndex };
             const maser = pickMaser(clientX, clientY, Math.min(radiusPx, 10));
             if (maser !== null) return { type: 'maser', index: maser };
             const cluster = pickCluster(clientX, clientY, Math.min(radiusPx, 10));
@@ -1549,7 +1626,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             placeRing(hoverRing, hit?.type === 'star' ? positions.subarray(hit.index * 3, hit.index * 3 + 3)
                 : hit?.type === 'maser' ? galaxy.maser(hit.index).position
                 : hit?.type === 'cluster' ? clusters[hit.kind].info(hit.index).position
-                : hit?.type === 'gc' ? gc.positionLy(hit.index).toArray() : null);
+                : hit?.type === 'gc' ? gc.positionLy(hit.index).toArray()
+                : hit?.type === 'bh' && !(bh.active() === hit.index && bh.shadowPx() > 4) ? bh.holeLy(hit.index, yearOf(clockRef.current.time)).toArray() : null);
             placeRing(bodyHoverRing, hit?.type === 'body' ? solar.byId.get(hit.id).position.toArray()
                 : hit?.type === 'cloud' ? hit.position : null);
             if (hit?.type === 'cloud') {
@@ -1580,6 +1658,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let pressedGalaxy = null;  // and the galaxy's (its centre or an arm)
         let pressedCluster = null;  // and a star cluster's ({kind, index})
         let pressedGc = null;  // and what orbits Sgr A* (its index)
+        let pressedBh = null;  // and a stellar black hole (its index)
         const onPointerDown = (e) => {
             downAt = { x: e.clientX, y: e.clientY };
             // Hide the hover state while dragging; it is stale once the view moves
@@ -1592,24 +1671,27 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             const labelGalaxy = pressedGalaxy;
             const labelCluster = pressedCluster;
             const labelGc = pressedGc;
+            const labelBh = pressedBh;
             pressedRing = null;
             pressedRegion = null;
             pressedGalaxy = null;
             pressedCluster = null;
             pressedGc = null;
+            pressedBh = null;
             if (!downAt || e.button !== 0) return;
             const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
             downAt = null;
             if (moved > 5) return;
             // Ring features, the Oort cloud and the galaxy are picked by
             // their labels (star clusters by theirs too, or their markers)
-            const hit = ringId || labelRegion || labelGalaxy || labelCluster || labelGc !== null ? null
+            const hit = ringId || labelRegion || labelGalaxy || labelCluster || labelGc !== null || labelBh !== null ? null
                 : pickAny(e.clientX, e.clientY, e.pointerType === 'touch' ? 24 : 14, true);
             // A maser opens its arm's card (the Milky Way's if it's on none)
             setSelectedGalaxy(labelGalaxy);
             setSelectedMaser(hit?.type === 'maser' ? hit.index : null);
             setSelectedCluster(labelCluster ?? (hit?.type === 'cluster' ? { kind: hit.kind, index: hit.index } : null));
             setSelectedGc(labelGc ?? (hit?.type === 'gc' ? hit.index : null));
+            setSelectedBh(labelBh ?? (hit?.type === 'bh' ? hit.index : null));
             setSelectedStar(hit?.type === 'star' ? hit.index : null);
             setSelectedBody(hit?.type === 'body' ? hit.id : null);
             setSelectedRing(ringId);
@@ -1633,6 +1715,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         : hit.type === 'maser' ? galaxy.maser(hit.index).label
                         : hit.type === 'cluster' ? clusters[hit.kind].info(hit.index).label
                         : hit.type === 'gc' ? gcLabel(gc.objects[hit.index])
+                        : hit.type === 'bh' ? bhLabel(bh.systems[hit.index])
                         : solar.byId.get(hit.id).name;
                     tooltip.style.display = 'block';
                     tooltip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 10}px)`;
@@ -1738,6 +1821,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let axisLabels = [];
         const clusterLabels = {};  // kind -> labels, made once that kind is in
         let gcLabels = [];  // the Galactic Centre close-up's, made once it's in
+        let bhLabels = [];  // the stellar black holes', likewise
         // Body and ring label sizes (px) for the overlap tests, measured
         // together once the view is laid out
         let labelsMeasured = false;
@@ -2002,6 +2086,38 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 if (free) skyBoxes.push(box);
                 setLabel(label, free ? [box.x, box.y] : null, 0, 0);
             }
+            // The stellar black holes: each named while near enough, on its
+            // hole in its close-up, with its star named there too
+            if (bh && !bhLabels.length) {
+                bhLabels = bh.systems.flatMap((sys, i) => [
+                    { index: i, el: makeLabelEl(sys.name, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
+                    { index: i, star: true, el: makeLabelEl(`${sys.name}'s star`, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
+                ]);
+                for (const label of bhLabels) makeClickable(label.el, () => { pressedBh = label.index; });
+            }
+            for (const label of bhLabels) {
+                const selected = opts.selectedBh === label.index && !label.star;
+                if (selected !== label.selected) {
+                    label.el.classList.toggle('selected', selected);
+                    label.selected = selected;
+                }
+                const close = bh.active() === label.index && bh.closeUp() > 0.3;
+                const wanted = opts.showLabels && opts.showBlackHoles && (close || (!label.star && (selected || bh.named(label.index, starCamera.position))));
+                let p = null;
+                if (wanted) {
+                    // In the close-up, from its layer's exact camera
+                    p = close ? bh.screenPoint(Boolean(label.star), width, height)
+                        : toScreen(starPosition.fromArray(bh.systems[label.index].position_ly), width, height);
+                }
+                if (p) {
+                    measure(label);
+                    const box = { x: p[0] + 8, y: p[1] - 8, w: label.w, h: label.h };
+                    const free = selected || !hitsSky(box);
+                    if (free) skyBoxes.push(box);
+                    p = free ? [box.x, box.y] : null;
+                }
+                setLabel(label, p, 0, 0);
+            }
             // Body labels go up and right of the body, in priority order (see
             // sortBodyLabels), each only where it overlaps none placed before.
             // Earth is labelled from anywhere, with a ring, so you can always
@@ -2086,7 +2202,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             const { clientWidth: width, clientHeight: height } = mount;
             if (!height) return;
             const maxPx = Math.min(120, width * 0.25);
-            const dist = camera.position.distanceTo(controls.target);
+            const dist = bhViewNow()?.at.length() ?? camera.position.distanceTo(controls.target);
             const marker = ladderMarkerRef.current;
             const markerAt = `${((zoomLadderPosition(zoomLevels, dist) + 0.5) / zoomLevels.length * 100).toFixed(2)}%`;
             if (marker && markerAt !== lastMarker) {
@@ -2132,6 +2248,54 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 }
             }
         };
+
+        // Riding along with a stellar black hole (s.follow.bh), the camera
+        // keeps its place from the hole. Its place from the Sun (ly, doubles)
+        // goes in ~2-4 km steps out there, and rounded afresh each frame as
+        // the hole moved, the view jumped a px or two (more where the light
+        // is bent). So the controls work in the hole's own frame (ly from
+        // it: enterHoleFrame, before controls.update), and its place from
+        // the hole is kept exactly from frame to frame (bhView); then back
+        // to ly from the Sun (leaveHoleFrame), turned to the hole. The
+        // close-up's layer camera takes the exact place (bh.update's view).
+        // bhView: {follow (the s.follow it is for), at (the camera from the
+        // hole, ly), camera, target (where they were left, ly from the Sun:
+        // moved since by something else, it starts again from there)}. A
+        // flight to the hole lands on it.
+        const bhNow = new THREE.Vector3();
+        const lookMatrix = new THREE.Matrix4();
+        const holeHere = new THREE.Vector3();  // the hole, in its own frame
+        let bhView = null;
+        const enterHoleFrame = () => {
+            const i = s.follow.bh;
+            if (i === null || i === undefined || !bh) return false;
+            bh.holeLy(i, yearOf(clockRef.current.time), bhNow);
+            const f = s.flight;
+            if (f) {
+                f.toTarget.copy(bhNow);
+                f.pivot.copy(bhNow).add(f.toOffset);
+                return false;
+            }
+            const kept = bhView && bhView.follow === s.follow && camera.position.equals(bhView.camera) && controls.target.equals(bhView.target);
+            if (kept) camera.position.copy(bhView.at);
+            else camera.position.sub(controls.target);
+            controls.target.set(0, 0, 0);
+            return true;
+        };
+        // After controls.update: the camera's place from the hole kept (a
+        // pan's moved target let go: it's back on the hole next frame), the
+        // camera turned to the hole, back to ly from the Sun
+        const leaveHoleFrame = () => {
+            const at = camera.position.clone().sub(controls.target);
+            lookMatrix.lookAt(camera.position, holeHere, camera.up);
+            camera.quaternion.setFromRotationMatrix(lookMatrix);
+            camera.position.add(bhNow);
+            controls.target.add(bhNow);
+            bhView = { follow: s.follow, at, camera: camera.position.clone(), target: controls.target.clone() };
+        };
+        // The camera's exact place from the followed hole this frame
+        // ({index, at}), or null
+        const bhViewNow = () => (bhView && bhView.follow === s.follow ? { index: s.follow.bh, at: bhView.at } : null);
 
         let lastFrame = null;
         let lastPublished = 0;
@@ -2180,17 +2344,22 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         let masersWereShown = false;
         let clustersWereShown = noClusters;
         let gcWasShown = false;
+        let bhWasShown = null;
         const animate = (now) => {
             advanceClock(now);
+            const inHoleFrame = enterHoleFrame();
             updateFlight(now);
             targetBefore.copy(controls.target);
             controls.update();
             // Only panning moves the target inside controls.update (rotating
             // and zooming don't): the view is no longer centred on what it was.
             // The threshold ignores rounding (controls.update re-scales the
-            // target every frame); a pan moves it by far more.
-            const panTolerance = 1e-6 * camera.position.distanceTo(controls.target) + 1e-12 * controls.target.length();
-            if (!s.flight && s.focused && targetBefore.distanceTo(controls.target) > panTolerance) {
+            // target every frame); a pan moves it by far more. In a black
+            // hole's frame, as it would be from the Sun.
+            const panTolerance = 1e-6 * camera.position.distanceTo(controls.target) + 1e-12 * (inHoleFrame ? bhNow : controls.target).length();
+            const panned = targetBefore.distanceTo(controls.target) > panTolerance;
+            if (inHoleFrame) leaveHoleFrame();
+            if (!s.flight && s.focused && panned) {
                 s.focused = false;
                 s.follow = { id: null, moveTarget: true };
                 setFocus({ type: 'none' });
@@ -2272,6 +2441,26 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     setGcShown(gcNow);
                 }
             }
+            // The stellar black holes, the nearest's close-up where the clock
+            // has it; the selection ring on the hole until its shadow shows
+            if (bh) {
+                const o = optionsRef.current;
+                const year = yearOf(clockRef.current.time);
+                bh.update(camera, year, mount.clientHeight, {
+                    visible: o.showBlackHoles,
+                    orbits: o.showLines && o.lineKinds.bhOrbits,
+                    selected: o.selectedBh,
+                    view: bhViewNow(),
+                });
+                if (o.selectedBh !== null) {
+                    placeRing(selectedRing, bh.active() === o.selectedBh && bh.shadowPx() > 4 ? null : bh.holeLy(o.selectedBh, year, bhNow).toArray());
+                }
+                const bhNowShown = bh.closeUp() > 0.3 ? bh.active() : null;
+                if (bhNowShown !== bhWasShown) {
+                    bhWasShown = bhNowShown;
+                    setBhShown(bhNowShown);
+                }
+            }
             if (s.step && !s.flight) {
                 const d = camera.position.distanceTo(controls.target);
                 if (s.stepDistance === null) s.stepDistance = d;
@@ -2329,8 +2518,13 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             syncCameras();
             setStarCamera(starCameraUniforms, starCamera.position);
             gc?.syncStarCamera(setStarCamera);
+            bh?.syncStarCamera(setStarCamera);
             lens.setRadio(optionsRef.current.showRadioFlow);
-            lens.update(gcLayer.layer.camera, Boolean(gc) && gcLayer.layer.visible, yearOf(clockRef.current.time));
+            lens.setSky(band && skyLayer.visible ? band.sky() : null);
+            // The stellar black hole whose close-up shows, else Sgr A*
+            const bhLens = bh?.lensTarget();
+            if (bhLens) lens.update(bhLayer.layer.camera, true, yearOf(clockRef.current.time), bhLens);
+            else lens.update(gcLayer.layer.camera, Boolean(gc) && gcLayer.layer.visible, yearOf(clockRef.current.time));
             solar?.updateMinorMoonFade(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateTextures(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateRingView(solarCamera.position);
@@ -2375,6 +2569,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             cmz.dispose();
             Object.values(clusters).forEach(c => c.dispose());
             gc?.dispose();
+            bh?.dispose();
             dust.dispose();
             starDisc.dispose();
             glarePass.dispose();
@@ -2591,6 +2786,24 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         }).catch(error => console.error('Error loading the galaxy model:', error));
     };
 
+    // A stellar black hole: fly to its system's view ('system': the star's
+    // whole orbit, from above it) or close to the hole ('hole'), riding
+    // along with the hole, and open its card
+    const viewBh = (index, view = 'system') => {
+        const s = sceneRef.current;
+        if (!s) return;
+        setShowBlackHoles(true);
+        selectStar(null);
+        setSelectedBh(index);
+        setFocus({ type: 'bh', index, view });
+        loadGalaxyData().then((data) => {
+            if (sceneRef.current !== s || !data.bh) return;
+            const pose = bhPose(data.bh.systems[index], view, yearOf(clockRef.current.time));
+            s.setFollowBh(index);
+            s.flyTo(pose.position, pose.target, pose.minDistance);
+        }).catch(error => console.error('Error loading the galaxy model:', error));
+    };
+
     const handleSearchSelect = (item) => {
         if (item.type === 'galaxy') {
             viewGalaxy(item.id);
@@ -2598,6 +2811,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             // Sgr A* itself, the circumnuclear disc: with the centre's card
             if (typeof item.id !== 'number') openGalaxyCard('centre');
             viewGc(item.id);
+        } else if (item.type === 'bh') {
+            viewBh(item.index, item.view);
         } else if (item.type === 'maser') {
             viewMaser(item.id);
         } else if (item.type === 'cluster') {
@@ -2789,11 +3004,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             : selectedCluster && landmarks?.[selectedCluster.kind]
                 ? landmarks[selectedCluster.kind].xyz_ly.slice(selectedCluster.index * 3, selectedCluster.index * 3 + 3)
             // (the render loop keeps it on its moving object)
-            : selectedGc !== null && s.gc ? s.gc.positionLy(selectedGc).toArray() : null);
+            : selectedGc !== null && s.gc ? s.gc.positionLy(selectedGc).toArray()
+            : selectedBh !== null && s.bh ? s.bh.holeLy(selectedBh, yearOf(clockRef.current.time)).toArray() : null);
         placeRing(s.bodySelectedRing, selectedBody && s.solar ? s.solar.byId.get(selectedBody).position.toArray() : null);
         s.selectedBodyId = selectedBody;  // the render loop keeps the ring on it as time runs
         s.solar?.setHighlightOrbit(selectedBody);
-    }, [selectedStar, selectedBody, selectedMaser, galaxyMasers, selectedCluster, landmarks, selectedGc, gcData, starBuffers, planetFacts, moonsData]);
+    }, [selectedStar, selectedBody, selectedMaser, galaxyMasers, selectedCluster, landmarks, selectedGc, gcData, selectedBh, bhData, starBuffers, planetFacts, moonsData]);
 
     // Keyboard: Esc closes the card and clears the selection (it never leaves
     // the 3D view: the Back button does). L lines, N names, R reset.
@@ -2846,6 +3062,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const cluster = selectedCluster && landmarks?.[selectedCluster.kind]
         ? clusterInfo(selectedCluster.kind, landmarks[selectedCluster.kind], selectedCluster.index) : null;
     const gcObject = selectedGc !== null && gcData ? gcData.objects[selectedGc] : null;
+    const bhSystem = selectedBh !== null && bhData ? bhData.systems[selectedBh] : null;
     // Current distances (AU), for the card
     const bodyDistances = body && {
         sun: body.position.length(),
@@ -2899,6 +3116,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const obj = focus.index !== null ? gcData.objects[focus.index] : null;
         title = obj ? obj.name : 'Galactic Centre';
         subtitle = obj ? gcKindName(obj) : 'Close-up: Sgr A* and the stars round it';
+    } else if (focus.type === 'bh' && bhData) {
+        const sys = bhData.systems[focus.index];
+        title = sys.name;
+        subtitle = focus.view === 'hole' ? 'Close to the black hole' : sys.title;
     } else if (focus.type === 'cluster' && landmarks?.[focus.kind]) {
         const info = clusterInfo(focus.kind, landmarks[focus.kind], focus.index);
         title = info.name;
@@ -2915,7 +3136,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     }
 
     return (
-        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser || cluster || gcObject ? 'has-card' : ''} ${legendsShifted ? 'legends-shifted' : ''}`}>
+        <div className={`universe-3d-screen ${star || body || ring || selectedRegion || (selectedGalaxy && galaxyCards) || maser || cluster || gcObject || bhSystem ? 'has-card' : ''} ${legendsShifted ? 'legends-shifted' : ''}`}>
             <div className="universe-3d-canvas" ref={mountRef} />
             <div className="universe-3d-labels" ref={labelsRef} />
             <div className="universe-3d-tooltip" ref={tooltipRef} />
@@ -3243,6 +3464,18 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         Sgr A*&apos;s gas in radio (EHT view)
                     </label>
                     <label
+                        className="universe-3d-checkbox"
+                        title="Gaia BH1, BH2 and BH3: dormant black holes found from the wobble of the star going round each, on their measured orbits, moving with the clock; fly close to see the black hole's shadow and the light bent round it"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showBlackHoles}
+                            onChange={(e) => setShowBlackHoles(e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: '#000', border: '2px solid #c4b5fd' }} />
+                        Black holes (Gaia BH1-3)
+                    </label>
+                    <label
                         className={`universe-3d-checkbox ${showGalaxy ? '' : 'disabled'}`}
                         title="The 199 masers (bright radio spots by newborn stars) whose parallaxes trace the spiral arms (Reid et al. 2019): the measurements the arms are drawn from"
                     >
@@ -3331,6 +3564,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 {gcShown && !(selectedGalaxy && galaxyCards) && (
                     <GalacticCentreLegend showOrbits={linesOn('gcOrbits')} radio={showRadioFlow} onOpen={() => openGalaxyCard('centre')} />
                 )}
+                {bhShown !== null && bhData && (
+                    <BlackHoleLegend sys={bhData.systems[bhShown]} showOrbits={linesOn('bhOrbits')} onOpen={() => setSelectedBh(bhShown)} />
+                )}
             </div>
             {selectedGalaxy && galaxyCards && (
                 <GalaxyInfoCard
@@ -3354,6 +3590,16 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     onView={() => viewGc(selectedGc)}
                     onCentre={() => openGalaxyCard('centre')}
                     onClose={() => setSelectedGc(null)}
+                />
+            )}
+            {bhSystem && (
+                <BlackHoleInfoCard
+                    sys={bhSystem}
+                    data={bhData}
+                    time={clockView.time}
+                    onView={() => viewBh(selectedBh, 'system')}
+                    onCloseUp={() => viewBh(selectedBh, 'hole')}
+                    onClose={() => setSelectedBh(null)}
                 />
             )}
             {maser && (

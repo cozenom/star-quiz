@@ -1,6 +1,6 @@
-// Gravitational lensing by Sgr A* (a Schwarzschild black hole; GM/c^2 =
-// rg, from galactic_centre.json black_hole), prototyped here to carry on
-// to other black holes later.
+// Gravitational lensing by a black hole (Schwarzschild; GM/c^2 = rg): Sgr
+// A* (galactic_centre.json black_hole), or a stellar one (black_holes.json,
+// utils/blackHoles3d), whichever the camera is near: one at a time.
 //
 // The bending: a ray passing with impact parameter b (in rg) is turned by
 // alpha(b), exact in Schwarzschild's geometry (Darwin 1959: elliptic
@@ -447,6 +447,9 @@ const lensShader = {
         uSimIn: { value: new THREE.Vector3(2, 3, 1) },
         uSimTime: { value: new THREE.Vector4() },
         uSimWeight: { value: new THREE.Vector2(1, 0) },
+        uSkyCube: { value: null },
+        uSky: { value: new THREE.Vector2() },
+        uViewToWorld: { value: new THREE.Matrix3() },
     },
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -486,6 +489,17 @@ const lensShader = {
             }
             return sum / 16.0;
         }
+        // A ray bent off the screen (d, view space): the Milky Way band's
+        // light that way while the band shows (its stars left out), the
+        // screen's mean light for the rest
+        uniform samplerCube uSkyCube;
+        uniform vec2 uSky;          // the band's fade, its display level
+        uniform mat3 uViewToWorld;
+        vec3 offScreen(vec3 d) {
+            vec3 c = (1.0 - uSky.x) * meanLight();
+            if (uSky.y > 0.0) c += pow(textureCube(uSkyCube, uViewToWorld * d).rgb * uSky.y, vec3(2.2));
+            return c;
+        }
         // The background seen along d, bent (black: falls in)
         vec3 background(vec3 d, vec3 l, float c, float b) {
             if (c > 0.0 && b <= BC) return vec3(0.0);
@@ -500,7 +514,7 @@ const lensShader = {
                 vec2 uv = dOut.xy / (-dOut.z) / uTanHalf * 0.5 + 0.5;
                 if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) return texture2D(tDiffuse, uv).rgb;
             }
-            return meanLight();
+            return offScreen(dOut);
         }
         void main() {
             vec3 d = normalize(vec3((vUv * 2.0 - 1.0) * uTanHalf, -1.0));
@@ -532,11 +546,12 @@ const lensShader = {
     `,
 };
 
-// The background's lens pass (insert it after the star layer's pass) and
-// its state: {pass, setRg(rgAu) (the hole's GM/c^2, once known),
-// setFlow(flow) (galactic_centre.json flow), setRadio(on) (the flow's radio
-// view instead of the simulated one), update(camera, on, year) each frame
-// before rendering, spotShown(), dispose()}
+// The background's lens pass (insert it after the star layer's pass, and
+// after any layer it should bend) and its state: {pass, setRg(rgAu) (Sgr
+// A*'s GM/c^2, once known), setFlow(flow) (galactic_centre.json flow),
+// setRadio(on) (the flow's radio view instead of the simulated one),
+// update(camera, on, year, hole) each frame before rendering, spotShown(),
+// dispose()}
 const HOURS_PER_YEAR = 8766;
 // The simulated flow's motion: each turbulence pattern carried round for
 // this long (rg/c; the next fading in as it fades out, so the shear never
@@ -544,6 +559,7 @@ const HOURS_PER_YEAR = 8766;
 // (~5 minutes; faster, each frame's pattern would be unlike the last)
 const SIM_WINDOW = 60;
 const SIM_PACE_MAX = 15;
+const ORIGIN = new THREE.Vector3();
 export function createLensPass() {
     let rgAu = 0;
     let flow = null;
@@ -602,9 +618,17 @@ export function createLensPass() {
             radio = Boolean(on);
             applyView();
         },
-        // camera: the close-up's layer camera (AU from Sgr A*, world matrix
-        // current); on: the close-up shows; year: the clock's
-        update(camera, on, year = 2000) {
+        // The Milky Way band's light all round (utils/milkyWayBand sky()), or
+        // null: for rays bent off the screen
+        setSky: (sky) => {
+            u.uSkyCube.value = sky?.texture ?? null;
+            u.uSky.value.set(sky?.fade ?? 0, sky?.level ?? 0);
+        },
+        // camera: the close-up's layer camera (Sgr A*'s: AU from it; world
+        // matrix current); on: the close-up shows; year: the clock's.
+        // other: a stellar black hole instead, {at (its place in camera's
+        // layer, AU), rgAu}: no glowing gas
+        update(camera, on, year = 2000, other = null) {
             const now = performance.now();
             const rgcSec = rgAu > 0 ? rgAu * 1.495978707e11 / 299792458 : 1;
             if (lastYear !== null) {
@@ -614,14 +638,18 @@ export function createLensPass() {
             }
             lastYear = year;
             lastNow = now;
-            const r = rgAu > 0 ? camera.position.length() / rgAu : Infinity;
+            const rg = other ? other.rgAu : rgAu;
+            hole.copy(other ? other.at : ORIGIN);
+            const r = rg > 0 ? camera.position.distanceTo(hole) / rg : Infinity;
             pass.enabled = on && r < LENS_REACH_RG;
             if (!pass.enabled) return;
-            hole.set(0, 0, 0).applyMatrix4(camera.matrixWorldInverse).divideScalar(rgAu);
+            hole.applyMatrix4(camera.matrixWorldInverse).divideScalar(rg);
             u.uHole.value.copy(hole);
+            u.uViewToWorld.value.setFromMatrix4(camera.matrixWorld);
             const t = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
             u.uTanHalf.value.set(t * camera.aspect, t);
-            if (!flow) return;
+            u.uFlowOn.value = flow && !other ? 1 : 0;
+            if (!flow || other) return;
             rot.setFromMatrix4(camera.matrixWorldInverse);
             u.uFlowAxis.value.copy(axisScene).applyMatrix3(rot).normalize();
             u.uFlowE1.value.copy(e1).applyMatrix3(rot).normalize();

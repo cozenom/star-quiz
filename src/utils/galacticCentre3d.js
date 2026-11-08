@@ -113,7 +113,7 @@ export const GC_STAR_GLOW_MAX = 0.25;
 export const GC_GLARE_SHARE = 0.03;
 
 // Eccentric anomaly for mean anomaly m (radians, any value)
-function eccentricAnomaly(m, e) {
+export function eccentricAnomaly(m, e) {
     const mm = m - 2 * Math.PI * Math.round(m / (2 * Math.PI));
     let E = e < 0.8 ? mm : Math.PI * Math.sign(mm || 1);
     for (let k = 0; k < KEPLER_ITERATIONS; k++) {

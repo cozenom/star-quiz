@@ -530,6 +530,10 @@ export function buildMilkyWayBand(renderer, scene, data, { lite = false, dust = 
             cubeCamera.update(renderer, marchScene);
         },
         fade: () => fade,
+        // The band's light all round (for the lens pass's rays bent off the
+        // screen, utils/blackHoleLens): its cube map, how much it shows, and
+        // its display level (the sky sphere's: linear = (cube * level)^2.2)
+        sky: () => ({ texture: target.texture, fade, level: fade * DISPLAY_BRIGHTNESS }),
         setVisible: (on) => { wanted = on; },
         dispose: () => {
             stopListening();

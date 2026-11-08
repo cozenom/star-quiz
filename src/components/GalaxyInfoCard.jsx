@@ -82,7 +82,7 @@ export function GalaxyLegend({ showModel, showMasers, showRanges = true, showGlo
 const fmt = (n) => Math.round(n).toLocaleString();
 const listing = (names) => names.join(', ');
 
-function Facts({ rows }) {
+export function Facts({ rows }) {
     return (
         <dl className="star-info-facts">
             {rows.filter(Boolean).map(([label, value]) => (
@@ -119,7 +119,7 @@ function Objects({ objects, onSelectMaser }) {
     );
 }
 
-function Sources({ refs }) {
+export function Sources({ refs }) {
     const unique = [...new Set(refs.filter(Boolean))];
     return (
         <p className="star-info-muted star-info-origin">
