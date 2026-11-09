@@ -419,6 +419,9 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
     const fed = systems.map((sys, i) => (sys.kind !== 'fed' ? null : {
         mesh: null,
         axis: new THREE.Vector3(...sys.orbit.normal),
+        // The spin's: along the orbit's, or measured apart from it (MAXI
+        // J1820+070); the jet's line goes along it
+        spin: new THREE.Vector3(...(sys.orbit.spin_axis ?? sys.orbit.normal)),
         // The axis on Earth's side: the close-up's up (bhPose)
         up: new THREE.Vector3(...sys.orbit.normal).multiplyScalar(
             new THREE.Vector3(...sys.orbit.normal).dot(new THREE.Vector3(...sys.sky.away)) > 0 ? -1 : 1),
@@ -462,7 +465,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
     layer.scene.add(jet);
     const jetE1 = new THREE.Vector3(), jetE2 = new THREE.Vector3();
     const rocheX = new THREE.Vector3(), rocheY = new THREE.Vector3(), scaleBy = new THREE.Vector3();
-    const lensKerr = { spin: 0, axis: null, star: { at: new THREE.Vector3(), radiusAu: 0 }, disc: null };
+    const lensKerr = { spin: 0, axis: null, discAxis: null, star: { at: new THREE.Vector3(), radiusAu: 0 }, disc: null };
     // Each system's orbit line, in its plane (x towards periastron), placed
     // on the hole by its matrix
     const orbitLines = systems.map((sys, i) => {
@@ -612,9 +615,9 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             starPoints.material.depthTest = lensed < 0.5 || starPx > 2;
             // The jet's line, on the hole, gone close to it
             if (f) {
-                jetE1.crossVectors(f.axis, Math.abs(f.axis.y) < 0.9 ? Y_AXIS : X_AXIS).normalize();
-                jetE2.crossVectors(f.axis, jetE1);
-                jet.matrix.makeBasis(jetE1, jetE2, f.axis).scale(scaleBy.setScalar(JET_LENGTH * separation)).setPosition(hole);
+                jetE1.crossVectors(f.spin, Math.abs(f.spin.y) < 0.9 ? Y_AXIS : X_AXIS).normalize();
+                jetE2.crossVectors(f.spin, jetE1);
+                jet.matrix.makeBasis(jetE1, jetE2, f.spin).scale(scaleBy.setScalar(JET_LENGTH * separation)).setPosition(hole);
                 jet.matrixWorldNeedsUpdate = true;
                 jet.material.opacity = JET_OPACITY * closeUp * (opts.orbits || opts.selected === active ? 1 : 0)
                     * THREE.MathUtils.smoothstep(toHole / separation, ...JET_FADE);
@@ -650,7 +653,8 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             const f = fed[active];
             if (!f) return { at: hole, rgAu: sys.black_hole.rg_au, kerr: null };
             lensKerr.spin = sys.black_hole.spin;
-            lensKerr.axis = f.axis;
+            lensKerr.axis = f.spin;
+            lensKerr.discAxis = f.axis;
             lensKerr.star.at.copy(star);
             lensKerr.star.radiusAu = sys.star.roche.r_vol * separation;
             lensKerr.disc = f.disc;

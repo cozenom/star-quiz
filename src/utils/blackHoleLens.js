@@ -478,6 +478,9 @@ export const KERR_GLSL = /* glsl */ `
     uniform vec3 uDiscLook;     // brightness scale, the star's drawn luminance, the eye's adaptation (all the view's light times it)
     uniform vec4 uDiscTurb;     // the disc's clock (rg/c), its patches' brightness range, its rings', a pixel (rad)
     uniform vec2 uDiscEdge;     // its fade: solid out to x, nothing at its outer edge; truncated inside, nothing at its inner edge, solid from y (0: not truncated)
+    uniform vec3 uDiscN;        // its axis (hole frame): along the spin, or tilted from it (MAXI J1820+070: the orbit's)
+    uniform vec3 uDiscE1;       // a direction in its plane
+    uniform float uDiscTilt;    // 1: tilted from the spin's equator
     uniform vec4 uStarBall;     // the companion: centre (hole frame, rg), radius (rg; 0: none)
     const float KERR_R = ${KERR_R.toFixed(1)};
     void ksMetric(vec3 x, out float r, out float f, out vec3 l, out float S, out float P) {
@@ -547,11 +550,12 @@ export const KERR_GLSL = /* glsl */ `
     float legDisc(vec3 X, vec3 D, float tMax, out float tHit, out vec3 hit) {
         tHit = 1e30;
         hit = X;
-        if (uDisc.z < 0.5 || abs(D.z) < 1e-9) return -1.0;
-        float t = -X.z / D.z;
+        float dn = dot(D, uDiscN);
+        if (uDisc.z < 0.5 || abs(dn) < 1e-9) return -1.0;
+        float t = -dot(X, uDiscN) / dn;
         if (t <= 0.0 || t > tMax) return -1.0;
         hit = X + D * t;
-        float r = sqrt(max(dot(hit.xy, hit.xy) - uSpin * uSpin, 0.0));
+        float r = sqrt(max(dot(hit, hit) - uSpin * uSpin, 0.0));
         if (!inDisc(r)) return -1.0;
         tHit = t;
         return r;
@@ -598,7 +602,7 @@ export const KERR_GLSL = /* glsl */ `
     float discTexture(vec3 hit, float r, float om) {
         float tau = uDiscTurb.x * om / 6.2831853;  // local orbits so far
         float lr = log(r);
-        float phi = atan(hit.y, hit.x);
+        float phi = atan(dot(hit, cross(uDiscN, uDiscE1)), dot(hit, uDiscE1));
         float foot = max(length(hit - uCamHole) * uDiscTurb.w, 1e-9);  // a pixel there (rg)
         float n = 0.0, w2 = 0.0;
         for (int k = 0; k < 2; k++) {
@@ -628,7 +632,7 @@ export const KERR_GLSL = /* glsl */ `
     // energy factor eloc: the gas on its circular orbit (prograde), its
     // light shifted by g, its turbulence (tex: discTexture's)
     vec3 discLight(vec3 hit, float r, float lam, float eloc, float tex) {
-        float a = uSpin;
+        float a = uSpin * dot(uDiscN, vec3(0.0, 0.0, 1.0));
         float r12 = sqrt(r), r32 = r * r12;
         float om = 1.0 / (r32 + a);
         float ut = (r32 + a) / (sqrt(r32) * sqrt(max(r32 - 3.0 * r12 + 2.0 * a, 1e-6)));
@@ -663,11 +667,12 @@ export const KERR_GLSL = /* glsl */ `
     // The disc where a ray crosses it, over what's behind: its light added
     // to acc, behind the share tr still seen through what's in front; tr
     // cut by its opacity
-    void addDisc(vec3 hit, float r, float lam, float eloc, inout vec3 acc, inout float tr) {
+    void addDisc(vec3 hit, vec3 dir, float r, float lam, float eloc, inout vec3 acc, inout float tr) {
         float tex = discTexture(hit, r, 1.0 / (r * sqrt(r) + uSpin));
         float o = discOpacity(r, tex);
         if (o <= 0.0) return;
-        acc += tr * o * discLight(hit, r, lam, eloc, tex);
+        float lamD = uDiscTilt > 0.5 ? dot(cross(hit, normalize(dir)), uDiscN) : lam;
+        acc += tr * o * discLight(hit, r, lamD, eloc, tex);
         tr *= 1.0 - o;
     }
 `;
@@ -704,6 +709,9 @@ const lensShader = {
         uDiscLook: { value: new THREE.Vector3(1, 0.5, 1) },
         uDiscTurb: { value: new THREE.Vector4() },
         uDiscEdge: { value: new THREE.Vector2() },
+        uDiscN: { value: new THREE.Vector3(0, 0, 1) },
+        uDiscE1: { value: new THREE.Vector3(1, 0, 0) },
+        uDiscTilt: { value: 0 },
         uStarBall: { value: new THREE.Vector4() },
     },
     vertexShader: /* glsl */ `
@@ -806,14 +814,14 @@ const lensShader = {
                 float tc = max(-sc, 0.0);
                 rD = legDisc(P, D, tc, tD, hD);
                 tS = legStar(P, D);
-                if (rD > 0.0 && tD < tS) addDisc(hD, rD, cp.z, 1.0, acc, tr);
+                if (rD > 0.0 && tD < tS) addDisc(hD, D, rD, cp.z, 1.0, acc, tr);
                 vec3 D2 = turnToHole(D, P, alpha);
                 // (the star in front on the first leg: it's what shows)
                 if (tS >= tc) {
                     vec3 X2 = P + D * tc;
                     rD = legDisc(X2, D2, 1e30, tD, hD);
                     tS = legStar(X2, D2);
-                    if (rD > 0.0 && tD < tS) addDisc(hD, rD, cp.z, 1.0, acc, tr);
+                    if (rD > 0.0 && tD < tS) addDisc(hD, D2, rD, cp.z, 1.0, acc, tr);
                 }
                 vec3 sky = alpha < 1e-6 ? texture2D(tDiffuse, vUv).rgb : skyAlong(D2);
                 return acc + tr * sky * uDiscLook.z;
@@ -831,7 +839,7 @@ const lensShader = {
                 float sE = -sqrt(KERR_R * KERR_R - bF * bF);
                 rD = legDisc(P, D, sE - sc, tD, hD);
                 tS = legStar(P, D);
-                if (rD > 0.0 && tD < tS) addDisc(hD, rD, cp.z, eloc, acc, tr);
+                if (rD > 0.0 && tD < tS) addDisc(hD, D, rD, cp.z, eloc, acc, tr);
                 if (tS < sE - sc || tr < 0.004) return acc + tr * skyAlong(D) * uDiscLook.z;
                 x = P + D * (sE - sc);
                 vec3 n = turnToHole(normalize(p), x, ksBend(bF, sE) - ksBend(bF, sc));
@@ -855,11 +863,12 @@ const lensShader = {
                 ksRhs(x + h * k3x, p + h * k3p, k4x, k4p);
                 vec3 nx = x + h / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
                 vec3 np = p + h / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
-                if (uDisc.z > 0.5 && x.z * nx.z < 0.0) {
-                    vec3 hit = mix(x, nx, x.z / (x.z - nx.z));
-                    float rh = sqrt(max(dot(hit.xy, hit.xy) - a * a, 0.0));
+                float s0 = dot(x, uDiscN), s1 = dot(nx, uDiscN);
+                if (uDisc.z > 0.5 && s0 * s1 < 0.0) {
+                    vec3 hit = mix(x, nx, s0 / (s0 - s1));
+                    float rh = sqrt(max(dot(hit, hit) - a * a, 0.0));
                     if (inDisc(rh)) {
-                        addDisc(hit, rh, lam, eloc, acc, tr);
+                        addDisc(hit, np, rh, lam, eloc, acc, tr);
                         if (tr < 0.004) return acc;
                     }
                 }
@@ -873,7 +882,7 @@ const lensShader = {
                     dir = turnToHole(dir, x, 2.0 / bO - ksBend(bO, dot(x, dir)));
                     rD = legDisc(x, dir, 1e30, tD, hD);
                     tS = legStar(x, dir);
-                    if (rD > 0.0 && tD < tS) addDisc(hD, rD, lam, eloc, acc, tr);
+                    if (rD > 0.0 && tD < tS) addDisc(hD, dir, rD, lam, eloc, acc, tr);
                     return acc + tr * skyAlong(dir) * uDiscLook.z;
                 }
             }
@@ -929,6 +938,7 @@ const SIM_PACE_MAX = 15;
 const ORIGIN = new THREE.Vector3();
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const kAxis = new THREE.Vector3(), kE1 = new THREE.Vector3(), kE2 = new THREE.Vector3(), kStar = new THREE.Vector3();
 
 // The disc's turbulence (KERR_GLSL discTexture): the range of its patches'
@@ -1054,7 +1064,7 @@ export function createLensPass() {
         // other: a stellar black hole instead, {at (its place in camera's
         // layer, AU), rgAu, kerr}: no glowing gas. kerr, to trace it (see
         // the header): {spin, axis (its spin's direction, the layer's
-        // frame), star: {at (AU), radiusAu} or null, disc: {texture (its
+        // frame), discAxis (the disc's, if tilted from it: the orbit's), star: {at (AU), radiusAu} or null, disc: {texture (its
         // temperatures), tx (Vector3: log r of the first, per sample,
         // samples), t (the temperatures), rIn, rOut, rIsco (rg), look, star,
         // teff (discLook)} or null}.
@@ -1100,6 +1110,11 @@ export function createLensPass() {
                 const dsc = kerr.disc;
                 if (dsc) {
                     u.uDisc.value.set(dsc.rIn, dsc.rOut, 1, dsc.rIsco);
+                    // Its axis (the orbit's) in the hole's frame, and whether
+                    // it's tilted from the spin's equator
+                    const dn = u.uDiscN.value.copy(kerr.discAxis ?? kerr.axis).applyMatrix3(rot).applyMatrix3(toHole).normalize();
+                    u.uDiscE1.value.crossVectors(dn, Math.abs(dn.z) < 0.9 ? Z_AXIS : X_AXIS).normalize();
+                    u.uDiscTilt.value = dn.z < Math.cos(THREE.MathUtils.degToRad(1)) ? 1 : 0;
                     // Truncated far outside the innermost stable orbit (V404
                     // Cygni, quiet): its inner edge fades too
                     const truncated = dsc.rIn > 2 * dsc.rIsco;

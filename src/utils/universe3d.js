@@ -483,9 +483,23 @@ export function buildSearchIndex(constellationData, starBuffers, lineStarInfo, p
     return items;
 }
 
+// A term from each word on, its spaces and punctuation dropped:
+// "cygnus x 1" -> ["cygnusx1", "x1", "1"]. Cached: built once per term.
+const compactTails = new Map();
+function compactTailsOf(term) {
+    let tails = compactTails.get(term);
+    if (!tails) {
+        const words = term.split(' ');
+        tails = words.map((_, i) => words.slice(i).join('').replace(/[^a-z0-9]/g, ''));
+        compactTails.set(term, tails);
+    }
+    return tails;
+}
+
 // Best matches for a query: whole-term prefix, then word prefix, then
 // substring. "HIP 12345" or a bare number looks up a Hipparcos star, listed
-// first; a bare number matches names too ("404": V404 Cygni).
+// first; a bare number matches names too ("404": V404 Cygni). Spaces and
+// punctuation don't have to match: "x1" Cygnus X-1, "1820070" MAXI J1820+070.
 export function searchIndex(items, starBuffers, query, limit = 8) {
     const q = normalizeSearchText(query);
     if (!q) return [];
@@ -509,6 +523,18 @@ export function searchIndex(items, starBuffers, query, limit = 8) {
     // A bare number also matches a designation's number: "404" V404, "31" M31
     const isNumber = /^\d+$/.test(q);
     const designation = (word) => word.length > q.length && word.endsWith(q) && /^[a-z]+$/.test(word.slice(0, -q.length));
+    // The query without its spaces and punctuation, against each word on
+    const qc = q.replace(/[^a-z0-9]/g, '');
+    const compactScore = (term) => {
+        if (!qc) return Infinity;
+        let best = Infinity;
+        for (const tail of compactTailsOf(term)) {
+            if (tail.startsWith(qc)) best = Math.min(best, 2);
+            // A designation's number: "1820070" J1820+070
+            else if (/^\d/.test(qc) && tail.replace(/^[a-z]+/, '').startsWith(qc)) best = Math.min(best, 2);
+        }
+        return best;
+    };
     const scored = [];
     for (const item of items) {
         let best = Infinity;
@@ -517,6 +543,7 @@ export function searchIndex(items, starBuffers, query, limit = 8) {
             else if (term.startsWith(q)) best = Math.min(best, 1);
             else if (isNumber && term.split(' ').some(designation)) best = Math.min(best, 1.5);
             else if (term.split(' ').some(word => word.startsWith(q))) best = Math.min(best, 2);
+            else if (compactScore(term) < Infinity) best = Math.min(best, 2);
             else if (term.includes(q)) best = Math.min(best, 3);
         }
         if (best < Infinity) scored.push({ item, score: best });

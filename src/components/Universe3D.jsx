@@ -3487,7 +3487,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     </label>
                     <label
                         className="universe-3d-checkbox"
-                        title="Gaia BH1, BH2 and BH3, dormant black holes found from the wobble of the star going round each, and Cygnus X-1 and V404 Cygni, fed by theirs, with discs and spin: on their measured orbits, moving with the clock; fly close to see the black hole's shadow and the light bent round it"
+                        title="Gaia BH1, BH2 and BH3, dormant black holes found from the wobble of the star going round each, and Cygnus X-1, V404 Cygni, MAXI J1820+070 and GRS 1915+105, fed by theirs, with discs and spin: on their measured orbits, moving with the clock; fly close to see the black hole's shadow and the light bent round it"
                     >
                         <input
                             type="checkbox"

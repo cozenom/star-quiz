@@ -26,6 +26,10 @@ const metalShare = (feH) => {
     const share = 10 ** feH;
     return share >= 0.1 ? `${Math.round(share * 100)}%` : `1/${Math.round(1 / share / 10) * 10}`;
 };
+// A position angle as a compass direction: 205 -> "south-southwest"
+const COMPASS = ['north', 'north-northeast', 'northeast', 'east-northeast', 'east', 'east-southeast', 'southeast', 'south-southeast',
+    'south', 'south-southwest', 'southwest', 'west-southwest', 'west', 'west-northwest', 'northwest', 'north-northwest'];
+const compass = (pa) => COMPASS[Math.round((((pa % 360) + 360) % 360) / 22.5) % 16];
 // km, rounded for reading: "940,000 km", "6.1 million km"
 const km = (v) => (v >= 1e6 ? `${sig(v / 1e6, 2)} million km` : `${sig(v, 2)} km`);
 const kelvin = (t) => (t >= 1e6 ? `${sig(t / 1e6, 2)} million K` : `${sig(t, 2)} K`);
@@ -37,16 +41,20 @@ function fedRows(sys) {
     const rows = [];
     if (d.state === 'soft') {
         rows.push(['Disc', <>from {km(d.r_in_rg * hole.rg_km)} out (the innermost stable orbit) to about {km(d.r_out_rg * hole.rg_km)}
-            <div className="star-info-muted">{kelvin(d.t_peak_k)} at its hottest, shining in X-rays; {kelvin(d.t_out_k)} at its edge{d.r_out_note && ' (its outer edge assumed: a disc fed by a wind is small)'}. Fed {sig(d.mdot_g_s / 1e15, 2)} billion tonnes a second, {sig(d.l_edd * 100, 2)}% of the most it could take (Eddington&apos;s limit; in its soft state)</div></>]);
+            <div className="star-info-muted">{kelvin(d.t_peak_k)} at its hottest, shining in X-rays; {kelvin(d.t_out_k)} at its edge{d.r_out_note && ' (its outer edge assumed: a disc fed by a wind is small)'}{d.irradiation && ', its outer parts warmed by the X-rays from its centre'}. Fed {sig(d.mdot_g_s / 1e15, 2)} billion tonnes a second, {sig(d.l_edd * 100, 2)}% of the most it could take (Eddington&apos;s limit){d.state_note ? `: ${d.state_note}` : '; in its soft state'}</div></>]);
     } else {
         rows.push(['Disc', <>quiet: from about {km(d.r_in_rg * hole.rg_km)} to {km(d.r_out_rg * hole.rg_km)} from the black hole, cool, about {kelvin(d.t_in_k)}
-            <div className="star-info-muted">giving {Math.round(d.veiling * 100)}% of the system&apos;s red light; inside it, a thin hot flow that doesn&apos;t show to the eye</div></>]);
+            <div className="star-info-muted">giving {Math.round(d.veiling * 100)}% of the system&apos;s red light; inside it, a thin hot flow that doesn&apos;t show to the eye{d.r_in_note && ` (its inner edge ${d.r_in_note})`}</div></>]);
     }
-    rows.push(['Jet', <>{Math.abs(sys.jet.pa_deg)}&deg; {sys.jet.pa_deg < 0 ? 'west' : 'east'} of north on our sky
+    if (sys.orbit.misalignment_deg > 5) {
+        rows.push(['Tilted spin', <>its spin {Math.round(sys.orbit.misalignment_deg)}&deg; from its orbit&apos;s axis
+            <div className="star-info-muted">the jets point along the spin, the disc lies in the orbit&apos;s plane; at least 40&deg; apart (from the jets&apos; angle and the orbit&apos;s, its polarised light), the smallest that fits is drawn</div></>]);
+    }
+    rows.push(['Jet', <>pointing {compass(sys.jet.pa_deg)} on our sky
         <div className="star-info-muted">seen in radio, along the spin&apos;s axis; not visible to the eye</div></>]);
     if (sys.outbursts) {
         rows.push(['Outbursts', <>{sys.outbursts.join(', ')}
-            <div className="star-info-muted">the disc floods inwards and the system flares for weeks; drawn as it is between them</div></>]);
+            <div className="star-info-muted">{sys.outburst_note ?? 'the disc floods inwards and the system flares for weeks to months; drawn as it is between them'}</div></>]);
     }
     if (sys.tertiary) {
         const t = sys.tertiary;
@@ -67,7 +75,7 @@ export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, 
     const period = o.period_yr < 2 ? `${o.period_d < 30 ? sig(o.period_d, 3) : fmt(o.period_d)} days` : `${o.period_yr.toFixed(1)} years`;
     const shape = o.e > 0.6 ? 'a long ellipse' : o.e > 0.3 ? 'an oval' : o.e > 0.005 ? 'nearly round' : 'round';
     const lightMinutes = (au) => au * 499.005 / 60;
-    const spin = isFed && <div className="star-info-muted">spinning at least {hole.spin} of the most a black hole can ({hole.spin_note}); its horizon {sig(2 * hole.rg_km * hole.r_plus_rg)} km across</div>;
+    const spin = isFed && <div className="star-info-muted">spinning at {hole.spin} of the most a black hole can: {hole.spin_note}; its horizon {sig(2 * hole.rg_km * hole.r_plus_rg)} km across</div>;
     const rows = [
         ['Distance', <>{fmt(sys.distance_ly)} ly
             <span className="star-info-muted"> ± {fmt(sys.distance_err_ly)} · in {sys.constellation}</span></>],
@@ -75,7 +83,7 @@ export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, 
             {spin || <div className="star-info-muted">its event horizon {sig(2 * hole.horizon_km)} km across; its shadow, the dark disc you&apos;d see, {sig(2 * hole.shadow_km)} km</div>}</>],
         ['Star', <>{star.type}: {star.mass_msun} Suns, {sig(star.radius_rsun, 2)} times the Sun&apos;s width
             <div className="star-info-muted">{fmt(star.teff_k)} K at its surface, {sig(star.lum_lsun, 2)} times the Sun&apos;s light
-                {star.fe_h !== null && <>, {metalShare(star.fe_h)} of the Sun&apos;s share of metals</>}; magnitude {star.g_mag} from Earth{star.g_mag > 6 && (star.g_mag < 10 ? ', too faint for the eye but easy in binoculars' : ', too faint to see by eye')}
+                {star.fe_h !== null && <>, {metalShare(star.fe_h)} of the Sun&apos;s share of metals</>}; {star.g_mag === null ? 'hidden from Earth in visible light by dust, seen in infrared' : <>magnitude {star.g_mag} from Earth{star.g_mag > 6 && (star.g_mag < 10 ? ', too faint for the eye but easy in binoculars' : ', too faint to see by eye')}</>}{star.teff_note && ` (its temperature ${star.teff_note})`}
                 {isFed && <>. It {star.roche.fill >= 1 ? 'fills' : `fills ${Math.round(star.roche.fill * 100)}% of the way to the edge of`} the space where its own gravity rules, stretched towards the black hole</>}</div></>],
         ...(isFed ? fedRows(sys) : []),
         ['Orbit', <>once round every {period}
