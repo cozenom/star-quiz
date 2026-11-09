@@ -2275,6 +2275,17 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const lookUp = new THREE.Vector3();
         let bhView = null;
         let bhSince = 0;
+        // OrbitControls also updates on each pointer move and wheel notch,
+        // between frames: there the camera is in ly from the Sun, and a drag
+        // turned it round north instead of the disc's axis (for MAXI
+        // J1820+070's and GRS 1915+105's axes, far from north, the two turns
+        // nearly cancelled: the view only moved once let go). So while riding
+        // along, those updates wait for the frame's (their drag, zoom and pan
+        // add up in the meantime).
+        let ridingHole = false;
+        let frameUpdate = false;
+        const controlsUpdate = controls.update.bind(controls);
+        controls.update = (deltaTime) => (ridingHole && !frameUpdate ? false : controlsUpdate(deltaTime));
         const enterHoleFrame = (now) => {
             const i = s.follow.bh;
             if (i === null || i === undefined || !bh) return false;
@@ -2296,6 +2307,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             fromLocal.copy(toLocal).invert();
             camera.position.applyQuaternion(toLocal);
             controls.target.set(0, 0, 0);
+            // A pan waiting since the last frame is along the camera's axes
+            // from the Sun's frame
+            controls._panOffset.applyQuaternion(toLocal);
             return true;
         };
         // After controls.update: the camera's place from the hole kept (a
@@ -2370,9 +2384,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const animate = (now) => {
             advanceClock(now);
             const inHoleFrame = enterHoleFrame(now);
+            ridingHole = inHoleFrame;
             updateFlight(now);
             targetBefore.copy(controls.target);
+            frameUpdate = true;
             controls.update();
+            frameUpdate = false;
             // Only panning moves the target inside controls.update (rotating
             // and zooming don't): the view is no longer centred on what it was.
             // The threshold ignores rounding (controls.update re-scales the
