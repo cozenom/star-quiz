@@ -1,5 +1,6 @@
 import React from 'react';
 import { BH_JET_COLOR, BH_MARKER_COLOR, bhState } from '../utils/blackHoles3d';
+import { FastStarsSky, MassChart } from './ClusterHoleCharts';
 import { msOf, yearOf } from '../utils/galacticCentre3d';
 import { bvToColor } from '../utils/universe3d';
 import { Facts, Sources } from './GalaxyInfoCard';
@@ -10,8 +11,10 @@ import MapLegend from './MapLegend';
 // Star_Data/curated/black_holes.json via scripts/build_black_holes.py): the
 // black hole, its star and their orbit, and where they are at the clock's
 // date; a fed one's spin, disc and jet too; a lone one (no star): the
-// microlensing event it was found by (LensingEventChart). Uses the star and
-// region cards' styles (.star-info-*).
+// microlensing event it was found by (LensingEventChart); a cluster's
+// (Omega Centauri's): the fast stars round it and each study's mass
+// (ClusterHoleCharts). Uses the star and region cards' styles
+// (.star-info-*).
 
 const fmt = (n) => Math.round(n).toLocaleString();
 const sig = (n, digits = 3) => Number(n.toPrecision(digits)).toLocaleString();
@@ -112,10 +115,69 @@ function LoneCard({ sys, data, t, onView, onCloseUp, onWatch, onClose }) {
     );
 }
 
-// time: the clock (ms); onWatch (a lone hole's): run the clock through its
-// event
+// A cluster's black hole (Omega Centauri's): the fast stars that betray
+// it, where it is, how heavy (debated), what hasn't been seen
+const WATCH_CENTURY_FROM = 1950;
+const WATCH_CENTURY_RATE = 5 * 31557600;   // 5 years a second
+// An offset on the sky [east, north] as a compass direction
+const paCompass = ([e, n]) => compass(Math.atan2(e, n) * 180 / Math.PI);
+function ClusterCard({ sys, data, t, onView, onCloseUp, onWatch, onClose }) {
+    const hole = sys.black_hole;
+    const stars = sys.fast_stars;
+    const speeds = stars.map(s => s.v2d_km_s);
+    const inner = stars.filter(s => s.r_proj_arcsec < 1).length;
+    const au = sys.cluster.au_per_arcsec;
+    const [mcmc, least] = [sys.centres.mcmc, sys.centres.min_mass];
+    const off = ([e, n]) => Math.hypot(e, n).toFixed(2);
+    const rows = [
+        ['Distance', <>{fmt(sys.distance_ly)} ly
+            <span className="star-info-muted"> ± {fmt(sys.distance_err_ly)} · at the centre of {sys.cluster.name}, in {sys.constellation}</span></>],
+        ['Black hole', <>about {fmt(hole.mass_msun)} times the Sun&apos;s mass, as drawn
+            <div className="star-info-muted">at least {fmt(hole.min_bound_msun)} if the fast stars are bound to it, {fmt(hole.min_accel_msun)} adding how little their paths curve (99% sure); its event horizon {sig(2 * hole.horizon_km, 2)} km across, its shadow {sig(2 * hole.shadow_km, 2)} km (about the Moon&apos;s orbit); spin unknown</div></>],
+        ['Fast stars', <>{stars.length} within 3&Prime; of the centre, {Math.min(...speeds)} to {Math.max(...speeds)} km/s across the sky
+            <div className="star-info-muted">the cluster&apos;s own escape speed there is {sys.cluster.v_esc_km_s} km/s: without something heavy at the centre they&apos;d leave it within a thousand years. {inner} of them, the fastest among them, within 1&Prime; ({fmt(au)} AU); all ordinary main-sequence stars of the cluster. Their speeds towards or away from us and their depths aren&apos;t measured, and none yet shows its path curving</div></>],
+        ['Where exactly', <>within about {sys.centres.err_arcsec}&Prime; ({fmt(sys.centres.err_arcsec * au)} AU) of the cluster&apos;s centre
+            <div className="star-info-muted">the stars&apos; accelerations, faint as they are, put it {off(mcmc)}&Prime; {paCompass(mcmc)} of the centre; the place needing the least mass is {off(least)}&Prime; {paCompass(least)}. Drawn at the centre</div></>],
+        ['Unseen', <>no light from anything falling in
+            <div className="star-info-muted">{sys.unseen.map(([how, what]) => `${how}: ${what}`).join('; ')}. The cluster&apos;s gas is thin, so it may feed too slowly to see</div></>],
+        ['Debated', <>one black hole, or many small ones?
+            <div className="star-info-muted">with the cluster&apos;s pulsars, Bañares-Hernández et al. (2025) find the core&apos;s dark mass better spread out, 200,000 to 300,000 Suns of dead stars and stellar black holes, leaving room for at most 6,000 Suns in one; that extra mass also raises the escape speed. Models growing one from a seed of 500 to 5,000 Suns reach about 50,000 and make fast stars like these. Measuring the stars&apos; speeds along our line of sight, and their paths curving, would settle it</div></>],
+        ['The cluster', <>{sys.cluster.name}: {sig(sys.cluster.mass_msun / 1e6, 2)} million Suns of stars
+            <div className="star-info-muted">the Milky Way&apos;s biggest globular cluster, with stars of many ages and makes: probably the core of a small galaxy the Milky Way swallowed (likely Gaia-Enceladus), its black hole with it</div></>],
+    ];
+    return (
+        <div className="star-info region-info">
+            <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
+            <h3 className="star-info-title">{sys.name}</h3>
+            <div className="star-info-subtitle">{sys.title} · found {sys.found}</div>
+            <div className="star-info-actions">
+                <button className="button-secondary star-info-fly" onClick={onCloseUp} title="Right by the black hole: its shadow, the cluster's stars bent round it">Close up</button>
+                <button className="button-primary star-info-fly" onClick={onView} title="Its fast stars round it, as from Earth">Fly there</button>
+            </div>
+            <p className="star-info-origin">{sys.about}</p>
+            <div className="lensing-chart">
+                <div className="lensing-chart-head">
+                    <span>The fast stars, at the clock&apos;s date</span>
+                    <button className="button-secondary lensing-chart-watch" onClick={() => onWatch(WATCH_CENTURY_FROM, WATCH_CENTURY_RATE)} title="Set the clock to 1950, five years a second">Watch a century</button>
+                </div>
+                <FastStarsSky sys={sys} t={t} />
+            </div>
+            <Facts rows={rows} />
+            <div className="lensing-chart">
+                <div className="lensing-chart-head"><span>Its mass, by study</span></div>
+                <MassChart sys={sys} />
+            </div>
+            <p className="star-info-muted star-info-origin">{data.about_cluster} {data.drawn_cluster}</p>
+            <Sources refs={sys.refs} />
+        </div>
+    );
+}
+
+// time: the clock (ms); onWatch(fromYear, rate): run the clock from a year
+// at a rate (s a second), for a lone hole's event or a cluster's stars
 export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, onWatch, onClose }) {
     const t = yearOf(time);
+    if (sys.kind === 'cluster') return <ClusterCard sys={sys} data={data} t={t} onView={onView} onCloseUp={onCloseUp} onWatch={onWatch} onClose={onClose} />;
     if (sys.kind === 'lone') return <LoneCard sys={sys} data={data} t={t} onView={onView} onCloseUp={onCloseUp} onWatch={onWatch} onClose={onClose} />;
     const state = bhState(sys, t);
     const o = sys.orbit;
@@ -170,11 +232,12 @@ export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, 
 
 // The close-up's key, shown while it is on screen
 export function BlackHoleLegend({ sys, showOrbits, onOpen }) {
-    if (sys.kind === 'lone') {
+    if (!sys.star) {
         const items = [
+            sys.fast_stars && { key: 'fast', swatch: <span className="universe-3d-swatch" style={{ background: '#ffd9a8' }} />, name: 'The fast stars, moving as measured (their depths drawn: not measured)' },
             { key: 'marker', swatch: <span className="universe-3d-swatch" style={{ background: 'transparent', border: `2px solid ${hex(BH_MARKER_COLOR)}` }} />, name: 'The black hole (marker, until its shadow is big enough to see)' },
             { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: 'Its shadow (true size), light bent round it' },
-        ];
+        ].filter(Boolean);
         return <MapLegend title={sys.name} onTitle={onOpen} storageKey="universe3d.legend.bh" items={items} />;
     }
     const isFed = sys.kind === 'fed';

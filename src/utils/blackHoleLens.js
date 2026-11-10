@@ -19,9 +19,16 @@
 //     each pixel's ray, bent by alpha(b), looks up the image where it ends
 //     up (as if its source were far off: the background is pc away, the
 //     camera AU); captured rays are black. Where the bent ray leaves the
-//     screen (strong bending, the photon ring) it takes the screen's mean
-//     light. Surface brightness is kept (Liouville): no magnification
-//     factor needed, arcs come out stretched as they should
+//     screen (strong bending, the photon ring) it looks up the background
+//     all round the camera (utils/lensSky's cube map; until that's drawn,
+//     the screen's mean light). Surface brightness is kept (Liouville): no magnification
+//     factor needed, arcs come out stretched as they should. Its alpha:
+//     the share of what's behind showing (0 in the shadow; a disc's or the
+//     gas's see-through share), for the far stars drawn after it
+//   - the far stars (the star layer's, a cluster's fast stars: FAR_LENS_GLSL,
+//     FarStarsPass): points, not stretched; each drawn twice, at its two
+//     images, from a table of the images against the star's angle from the
+//     hole, as if far off
 //   - the close-up's stars (LENS_GLSL, in their vertex shader): each star
 //     behind the hole drawn twice, its direct image and the one round the
 //     other side, found with the exact bending at its own distance, each
@@ -48,6 +55,7 @@
 // KERR_R take the bending as above (spin's share a / b^2: under 1e-6 rad).
 
 import * as THREE from 'three';
+import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 // The critical impact parameter (rg): rays inside it fall in
@@ -96,12 +104,7 @@ export function deflection(b) {
 }
 
 function deflectionTexture() {
-    const data = new Float32Array(TABLE_SIZE);
-    for (let i = 0; i < TABLE_SIZE; i++) {
-        const x = TABLE_X0 + (TABLE_X1 - TABLE_X0) * i / (TABLE_SIZE - 1);
-        data[i] = deflection(B_CRIT * (1 + Math.exp(x)));
-    }
-    const tex = new THREE.DataTexture(data, TABLE_SIZE, 1, THREE.RedFormat, THREE.FloatType);
+    const tex = new THREE.DataTexture(deflectionData(), TABLE_SIZE, 1, THREE.RedFormat, THREE.FloatType);
     tex.minFilter = tex.magFilter = THREE.NearestFilter;
     tex.needsUpdate = true;
     return tex;
@@ -207,6 +210,255 @@ export const LENS_GLSL = /* glsl */ `
         return C + (l * cos(theta) + side * (sgn * sin(theta))) * ds;
     }
 `;
+
+// The far stars (the star layer's, a cluster's fast stars: far off
+// compared with the camera's distance from the hole). A star is a point:
+// lensing moves it and brightens or dims it, but its image stays a point
+// (James et al. 2015, CQG 32, 065001, sec. 3.1), with the eye's blur (its
+// sprite) round it after (as their sec. 4.3.1 applies a camera's). Bent
+// with the background picture their sprites would stretch into arcs, so
+// while the pass runs they're drawn after it instead (FarStarsPass), each
+// twice: its direct image and the one round the other side, each brightened
+// or dimmed by its magnification (FAR_LENS_GLSL, in their vertex shader).
+// For a source far off, an image's angle from the hole depends only on the
+// star's and on the camera's distance r (rg): a table of both images'
+// angles and magnifications against the star's angle, worked out here
+// (bisection with ALPHA_GLSL's bending, as LENS_GLSL's) when r changes,
+// looked up on the GPU. Each is weighted by the pass's alpha where it lands:
+// the share of the background showing there (none in the shadow or behind
+// the companion star, a disc's see-through share, the eye's adaptation to a
+// disc: farLensBlend)
+// Table samples (over sqrt(beta / pi), dense near the hole), bisection
+// steps, the change in r that redraws it (share), the magnification's cap
+const FAR_SAMPLES = 1024;
+const FAR_STEPS = 32;
+const FAR_R_CHANGE = 1e-4;
+const FAR_MU_MAX = 1000;
+// The three.js layer the far stars are drawn in (their own pass)
+export const FAR_LENS_LAYER = 1;
+// In JS (labels, picking), points nearer than this many times the hole's
+// distance are taken as they are (not far off)
+export const FAR_LENS_MIN = 10;
+
+const farData = new Float32Array(4 * FAR_SAMPLES);
+let farTexture = null;
+const farShared = {
+    uFarLensDir: { value: new THREE.Vector3(0, 0, -1) },
+    uFarLensImage: { value: 1 },
+    uFarLensTable: { value: null },
+    uFarLensX: { value: new THREE.Vector3(FAR_SAMPLES, 0, 1) },
+};
+const farOn = { value: 0 };
+const farState = { on: false, r: 0, rgAu: 0, dirWorld: new THREE.Vector3() };
+
+// The table's values (alpha at each sample), worked out once
+let tableData = null;
+function deflectionData() {
+    if (!tableData) {
+        tableData = new Float32Array(TABLE_SIZE);
+        for (let i = 0; i < TABLE_SIZE; i++) {
+            const x = TABLE_X0 + (TABLE_X1 - TABLE_X0) * i / (TABLE_SIZE - 1);
+            tableData[i] = deflection(B_CRIT * (1 + Math.exp(x)));
+        }
+    }
+    return tableData;
+}
+// ALPHA_GLSL's bending, in JS from the same table
+function alphaInfTable(b) {
+    const f = (Math.log(Math.max(b / B_CRIT - 1, 1e-7)) - TABLE_X0) / ((TABLE_X1 - TABLE_X0) / (TABLE_SIZE - 1));
+    if (f >= TABLE_SIZE - 1) return 4 / b + 15 * Math.PI / (4 * b * b);
+    const g = Math.max(f, 0);
+    const i = Math.floor(g);
+    const d = deflectionData();
+    return d[i] + (d[Math.min(i + 1, TABLE_SIZE - 1)] - d[i]) * (g - i);
+}
+function alphaShare(theta, r) {
+    const b = r * Math.sin(theta) / Math.sqrt(1 - 2 / r);
+    return alphaInfTable(Math.max(b, B_CRIT * (1 + 1e-7))) * 0.5 * (1 + Math.cos(theta));
+}
+
+function farTex() {
+    if (!farTexture) {
+        farTexture = new THREE.DataTexture(farData, FAR_SAMPLES, 1, THREE.RGBAFormat, THREE.FloatType);
+        farTexture.minFilter = farTexture.magFilter = THREE.NearestFilter;
+        farTexture.needsUpdate = true;
+        farShared.uFarLensTable.value = farTexture;
+    }
+    return farTexture;
+}
+
+// The table for a camera r rg from the hole: per sample (the star at beta
+// = pi s^2 from the hole), the direct image's angle and ln magnification,
+// then the other image's. Returns the shadow's edge (rad)
+export function buildFarTable(r, data = farData) {
+    const edge = Math.asin(Math.min(B_CRIT * Math.sqrt(Math.max(1 - 2 / r, 0)) / r, 1));
+    // The bent ray's angle (+ the star's side) for the ray leaving at theta
+    // on side sgn (+1 the star's, -1 the other)
+    const bent = (theta, sgn) => sgn * (theta - alphaShare(theta, r));
+    for (let k = 0; k < FAR_SAMPLES; k++) {
+        const beta = Math.PI * (k / (FAR_SAMPLES - 1)) ** 2;
+        for (let side = 0; side < 2; side++) {
+            const sgn = side === 0 ? 1 : -1;
+            let lo = edge + 1e-9;
+            let hi = Math.PI;
+            for (let i = 0; i < FAR_STEPS; i++) {
+                const mid = 0.5 * (lo + hi);
+                if (sgn * (bent(mid, sgn) - beta) < 0) lo = mid;
+                else hi = mid;
+            }
+            const theta = 0.5 * (lo + hi);
+            const h = Math.max(1e-4 * theta, 1e-6);
+            const ta = Math.max(theta - h, edge + 1e-9), tb = Math.min(theta + h, Math.PI);
+            const rate = Math.abs(bent(tb, sgn) - bent(ta, sgn)) / (tb - ta);
+            const sb = Math.sin(beta);
+            // At beta pi the direct image is the star itself (the limit of
+            // sin theta / sin beta: 1 / rate); at beta 0, the ring (capped)
+            const mu = sb > 1e-6 ? Math.sin(theta) / (sb * rate) : (sgn > 0 && beta > 1 ? 1 / (rate * rate) : FAR_MU_MAX);
+            data[4 * k + 2 * side] = theta;
+            data[4 * k + 2 * side + 1] = Math.log(Math.min(Math.max(mu, 1e-30), FAR_MU_MAX));
+        }
+    }
+    if (data === farData) farTex().needsUpdate = true;
+    return edge;
+}
+
+// The far stars' shared uniforms; lensed: switched on with the pass (else
+// never: their own uFarLensOn, 0)
+export function farLensUniforms(lensed) {
+    farTex();
+    return { ...farShared, uFarLensOn: lensed ? farOn : { value: 0 } };
+}
+// Make star Points far-lensed ones (its material's uFarLensOn the shared
+// one; drawn in FAR_LENS_LAYER; never culled: a star behind the camera
+// has an image in front); again does nothing
+export function markFarLensed(points) {
+    if (points.userData.farLensed) return;
+    points.userData.farLensed = true;
+    points.frustumCulled = false;
+    points.layers.set(FAR_LENS_LAYER);
+    points.material.uniforms.uFarLensOn = farOn;
+}
+// A star material's blending: its light (premultiplied: rgb * alpha)
+// added, over the lens pass's picture by that picture's alpha (the
+// background's share showing there), else plainly; alpha left as it is
+export function farLensBlend(material, over) {
+    material.blending = THREE.CustomBlending;
+    material.blendEquation = THREE.AddEquation;
+    material.blendSrc = over ? THREE.DstAlphaFactor : THREE.OneFactor;
+    material.blendDst = THREE.OneFactor;
+    material.blendSrcAlpha = THREE.ZeroFactor;
+    material.blendDstAlpha = THREE.OneFactor;
+}
+// Whether the far stars are lensed now; the hole's distance from the
+// camera (AU)
+export const farLensOn = () => farState.on;
+export const farLensHoleAu = () => (farState.on ? farState.r * farState.rgAu : 0);
+// The pass's hole for them: on, its place in view space (rg), its rg (AU),
+// the view's rotation (quaternion), device px per radian
+function updateFarLens(on, holeView, rgAu, quaternion, pxPerRad) {
+    farState.on = on;
+    farOn.value = on ? 1 : 0;
+    if (!on) return;
+    const r = holeView.length();
+    farShared.uFarLensDir.value.copy(holeView).divideScalar(r);
+    farState.dirWorld.copy(farShared.uFarLensDir.value).applyQuaternion(quaternion);
+    farState.rgAu = rgAu;
+    if (!(Math.abs(r / farState.r - 1) < FAR_R_CHANGE)) {
+        farShared.uFarLensX.value.y = buildFarTable(r);
+        farState.r = r;
+    }
+    farShared.uFarLensX.value.z = pxPerRad;
+}
+// Where a far point looks to be (its direct image, as the stars are
+// drawn): rel, from the camera (world axes, any units); holeDist, the
+// hole's distance in the same units. out (from the camera); as it is while
+// the far stars aren't lensed, or if it's near
+export function farLensImage(rel, holeDist, out) {
+    const d = rel.length();
+    if (!farState.on || !(d > FAR_LENS_MIN * holeDist)) return out.copy(rel);
+    const l = farState.dirWorld;
+    const c = rel.dot(l) / d;
+    const sx = rel.x / d - l.x * c, sy = rel.y / d - l.y * c, sz = rel.z / d - l.z * c;
+    const sl = Math.hypot(sx, sy, sz);
+    if (sl < 1e-12) return out.copy(rel);
+    const f = Math.sqrt(Math.atan2(sl, c) / Math.PI) * (FAR_SAMPLES - 1);
+    const i = Math.min(Math.floor(f), FAR_SAMPLES - 2);
+    const theta = farData[4 * i] + (farData[4 * i + 4] - farData[4 * i]) * (f - i);
+    const cs = Math.cos(theta) * d, sn = Math.sin(theta) * d / sl;
+    return out.set(l.x * cs + sx * sn, l.y * cs + sy * sn, l.z * cs + sz * sn);
+}
+
+// In a far star's vertex shader (after SPRITE_VERTEX_GLSL): farLensImage
+// (its image on this draw's side, uFarLensImage) and farLensSprite (after
+// spriteFromMagnitude: a dimmed image's sprite shrunk by its
+// magnification, keeping its light in proportion; none over the shadow)
+export const FAR_LENS_GLSL = /* glsl */ `
+    uniform float uFarLensOn;
+    uniform vec3 uFarLensDir;      // to the hole (view space)
+    uniform float uFarLensImage;   // +1: direct images, -1: the others
+    uniform sampler2D uFarLensTable;
+    uniform vec3 uFarLensX;        // samples, the shadow's edge (rad), device px per rad
+    // mv: the star (view space); returns its image (at its distance); mu its
+    // magnification, gap its angle from the shadow's edge (rad)
+    vec3 farLensImage(vec3 mv, out float mu, out float gap) {
+        float d = length(mv);
+        vec3 s = mv / max(d, 1e-30);
+        float c = dot(s, uFarLensDir);
+        float beta = atan(length(cross(s, uFarLensDir)), c);
+        vec3 side = s - uFarLensDir * c;
+        side = length(side) > 1e-12 ? normalize(side)
+            : normalize(cross(uFarLensDir, abs(uFarLensDir.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+        float f = sqrt(beta / 3.14159265) * (uFarLensX.x - 1.0);
+        int i = int(min(f, uFarLensX.x - 2.0));
+        vec4 t = mix(texelFetch(uFarLensTable, ivec2(i, 0), 0), texelFetch(uFarLensTable, ivec2(i + 1, 0), 0), f - float(i));
+        bool direct = uFarLensImage > 0.0;
+        float theta = direct ? t.x : t.z;
+        mu = exp(direct ? t.y : t.w);
+        gap = theta - uFarLensX.y;
+        return (uFarLensDir * cos(theta) + side * (uFarLensImage * sin(theta))) * d;
+    }
+    void farLensSprite(float mu, float gap) {
+        if (mu < 1.0) {
+            float s0 = gl_PointSize;
+            float s1 = max(s0 * sqrt(mu), uPixelRatio);
+            vAlpha *= min(1.0, mu * (s0 * s0) / (s1 * s1));
+            vGlare *= mu;
+            gl_PointSize = s1;
+        }
+        gl_PointSize = min(gl_PointSize, max(2.0 * gap * uFarLensX.z, 1.0));
+        vSize = gl_PointSize;
+    }
+`;
+
+// Draws the far stars after the lens pass while it runs: each layer's
+// (visible ones of layers, their objects in FAR_LENS_LAYER) twice, the
+// direct images then the others, over its picture (farLensBlend)
+export class FarStarsPass extends Pass {
+    constructor(layers) {
+        super();
+        this.layers = layers;
+        this.needsSwap = false;
+    }
+
+    render(renderer, writeBuffer, readBuffer) {
+        const autoClear = renderer.autoClear;
+        renderer.autoClear = false;
+        renderer.setRenderTarget(this.renderToScreen ? null : readBuffer);
+        renderer.clearDepth();
+        for (const layer of this.layers) {
+            if (!layer.visible) continue;
+            const mask = layer.camera.layers.mask;
+            layer.camera.layers.set(FAR_LENS_LAYER);
+            for (const sgn of [1, -1]) {
+                farShared.uFarLensImage.value = sgn;
+                renderer.render(layer.scene, layer.camera);
+            }
+            layer.camera.layers.mask = mask;
+        }
+        farShared.uFarLensImage.value = 1;
+        renderer.autoClear = autoClear;
+    }
+}
 
 // The close-up stars' lens uniforms (their materials share them): {uLensTable,
 // uLensTableX}; uLensRg and uLensImage are each material's
@@ -697,6 +949,8 @@ const lensShader = {
         uSimTime: { value: new THREE.Vector4() },
         uSimWeight: { value: new THREE.Vector2(1, 0) },
         uSkyCube: { value: null },
+        uBgCube: { value: null },
+        uBgOn: { value: 0 },
         uSky: { value: new THREE.Vector2() },
         uViewToWorld: { value: new THREE.Matrix3() },
         uKerr: { value: 0 },
@@ -752,13 +1006,17 @@ const lensShader = {
             }
             return sum / 16.0;
         }
-        // A ray bent off the screen (d, view space): the Milky Way band's
-        // light that way while the band shows (its stars left out), the
-        // screen's mean light for the rest
+        // A ray bent off the screen (d, view space): the background that
+        // way (utils/lensSky's cube, all the far layers); without it, the
+        // Milky Way band's light that way while the band shows (its stars
+        // left out), the screen's mean light for the rest
         uniform samplerCube uSkyCube;
         uniform vec2 uSky;          // the band's fade, its display level
+        uniform samplerCube uBgCube;
+        uniform float uBgOn;
         uniform mat3 uViewToWorld;
         vec3 offScreen(vec3 d) {
+            if (uBgOn > 0.5) return textureCube(uBgCube, uViewToWorld * d).rgb;
             vec3 c = (1.0 - uSky.x) * meanLight();
             if (uSky.y > 0.0) c += pow(textureCube(uSkyCube, uViewToWorld * d).rgb * uSky.y, vec3(2.2));
             return c;
@@ -792,7 +1050,10 @@ const lensShader = {
         // A spinning hole's view along dv (view space): see the header. The
         // disc can be partly see-through (its edges: discOpacity): its light
         // is added up (acc) over what's behind, of which a share tr shows
+        // kerrColor's share of what's behind showing (its alpha)
+        float gTrans;
         vec3 kerrColor(vec3 dv) {
+            gTrans = 0.0;
             float a = uSpin;
             vec3 D = uToHole * dv;
             vec3 P = uCamHole;
@@ -810,7 +1071,10 @@ const lensShader = {
                 float c = -sc / rc;
                 float b = bF / sqrt(1.0 - 2.0 / rc);
                 float alpha = alphaInf(max(b, BC * (1.0 + 1e-7))) * 0.5 * (1.0 + c);
-                if (alpha < 1e-6 && uDisc.z < 0.5) return texture2D(tDiffuse, vUv).rgb * uDiscLook.z;
+                if (alpha < 1e-6 && uDisc.z < 0.5) {
+                    gTrans = legStar(P, D) < 1e30 ? 0.0 : 1.0;
+                    return texture2D(tDiffuse, vUv).rgb * uDiscLook.z;
+                }
                 float tc = max(-sc, 0.0);
                 rD = legDisc(P, D, tc, tD, hD);
                 tS = legStar(P, D);
@@ -824,6 +1088,7 @@ const lensShader = {
                     if (rD > 0.0 && tD < tS) addDisc(hD, D2, rD, cp.z, 1.0, acc, tr);
                 }
                 vec3 sky = alpha < 1e-6 ? texture2D(tDiffuse, vUv).rgb : skyAlong(D2);
+                gTrans = tS < 1e30 ? 0.0 : tr;
                 return acc + tr * sky * uDiscLook.z;
             }
             float eloc;
@@ -840,7 +1105,10 @@ const lensShader = {
                 rD = legDisc(P, D, sE - sc, tD, hD);
                 tS = legStar(P, D);
                 if (rD > 0.0 && tD < tS) addDisc(hD, D, rD, cp.z, eloc, acc, tr);
-                if (tS < sE - sc || tr < 0.004) return acc + tr * skyAlong(D) * uDiscLook.z;
+                if (tS < sE - sc || tr < 0.004) {
+                    gTrans = tS < sE - sc ? 0.0 : tr;
+                    return acc + tr * skyAlong(D) * uDiscLook.z;
+                }
                 x = P + D * (sE - sc);
                 vec3 n = turnToHole(normalize(p), x, ksBend(bF, sE) - ksBend(bF, sc));
                 float r0, f, S0, P0;
@@ -883,6 +1151,7 @@ const lensShader = {
                     rD = legDisc(x, dir, 1e30, tD, hD);
                     tS = legStar(x, dir);
                     if (rD > 0.0 && tD < tS) addDisc(hD, dir, rD, lam, eloc, acc, tr);
+                    gTrans = tS < 1e30 ? 0.0 : tr;
                     return acc + tr * skyAlong(dir) * uDiscLook.z;
                 }
             }
@@ -891,7 +1160,8 @@ const lensShader = {
         void main() {
             vec3 d = normalize(vec3((vUv * 2.0 - 1.0) * uTanHalf, -1.0));
             if (uKerr > 0.5) {
-                gl_FragColor = vec4(kerrColor(d), 1.0);
+                vec3 kc = kerrColor(d);
+                gl_FragColor = vec4(kc, gTrans * uDiscLook.z);
                 return;
             }
             float r = length(uHole);
@@ -899,25 +1169,27 @@ const lensShader = {
             float c = dot(d, l);
             float s = sqrt(max(1.0 - c * c, 0.0));
             if (s < 1e-7 && c < 0.0) {
-                gl_FragColor = texture2D(tDiffuse, vUv);  // straight away from it
+                gl_FragColor = vec4(texture2D(tDiffuse, vUv).rgb, 1.0);  // straight away from it
                 return;
             }
             // Impact parameter (rg), of the ray from a static observer at r
             float rr = sqrt(1.0 - 2.0 / r);
             float b = r * s / rr;
             vec3 color = background(d, l, c, b);
+            float trans = c > 0.0 && b <= BC ? 0.0 : 1.0;
             // The glowing gas: simulated, in front of what's behind it; or
             // radio, its light added (false colour)
             if (uFlowOn > 0.0 && (b < uFlowScale.y || r < uFlowScale.y)) {
                 if (uFlowSim > 0.5) {
                     vec4 fl = simTrace(d, b, 1.0 / rr);
                     color = color * fl.a + fl.rgb;
+                    trans *= fl.a;
                 } else {
                     float tb = flowTb(d, b, 1.0 / rr);
                     color += pow(afmhot(tb / uFlowScale.z), vec3(2.2));
                 }
             }
-            gl_FragColor = vec4(color, 1.0);
+            gl_FragColor = vec4(color, trans);
         }
     `,
 };
@@ -1026,6 +1298,7 @@ export function createLensPass() {
     let discOf = null;
     // The view's height (device px: the composer's), for a pixel's size
     let heightPx = 1000;
+    let shadowAngle = 0;
     pass.setSize = (width, height) => { heightPx = height; };
     // The hot spot's emissivity (simulated) at a flare's peak
     let simSpot = 0;
@@ -1074,6 +1347,13 @@ export function createLensPass() {
             u.uSkyCube.value = sky?.texture ?? null;
             u.uSky.value.set(sky?.fade ?? 0, sky?.level ?? 0);
         },
+        // The background all round (utils/lensSky's cube texture), or null
+        setBackground: (texture) => {
+            u.uBgCube.value = texture;
+            u.uBgOn.value = texture ? 1 : 0;
+        },
+        // The shadow's angular radius from the camera (rad; 0: the pass off)
+        shadowAngle: () => shadowAngle,
         // camera: the close-up's layer camera (Sgr A*'s: AU from it; world
         // matrix current); on: the close-up shows; year: the clock's.
         // other: a stellar black hole instead, {at (its place in camera's
@@ -1098,9 +1378,14 @@ export function createLensPass() {
             const r = rg > 0 ? camera.position.distanceTo(hole) / rg : Infinity;
             const kerr = other?.kerr ?? null;
             pass.enabled = on && (r < LENS_REACH_RG || Boolean(kerr?.disc));
-            if (!pass.enabled) return;
+            shadowAngle = pass.enabled ? Math.asin(Math.min(B_CRIT * Math.sqrt(Math.max(1 - 2 / r, 0)) / r, 1)) : 0;
+            if (!pass.enabled) {
+                updateFarLens(false);
+                return;
+            }
             hole.applyMatrix4(camera.matrixWorldInverse).divideScalar(rg);
             u.uHole.value.copy(hole);
+            updateFarLens(true, hole, rg, camera.quaternion, heightPx / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)));
             u.uViewToWorld.value.setFromMatrix4(camera.matrixWorld);
             const t = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
             u.uTanHalf.value.set(t * camera.aspect, t);

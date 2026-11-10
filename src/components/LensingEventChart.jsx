@@ -42,6 +42,10 @@ const PATH_YEARS = [2010.5, 2013.0];
 const PATH_SAMPLES = 400;
 const PATH_TICKS = [2011, 2012];
 const IMAGE_PX = (m) => Math.min(2.5 + 2 * Math.sqrt(m), 9);
+// "Watch it": the clock from late 2010, a month a second (through the
+// event in ~20 s)
+const WATCH_FROM = 2010.75;
+const WATCH_RATE = 2629800;
 
 const dateOf = (year) => new Date(msOf(year)).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 const times = (a) => (a >= 10 ? `${Math.round(a)}x` : `${a.toFixed(2)}x`);
@@ -161,8 +165,8 @@ function Sky({ sys, t }) {
     );
 }
 
-// sys: a lone system; t: the clock (year); onWatch: set the clock to just
-// before the event, running
+// sys: a lone system; t: the clock (year); onWatch(fromYear, rate): run
+// the clock (here from just before the event)
 export default function LensingEventChart({ sys, t, onWatch }) {
     const ev = sys.event;
     const now = bhEvent(sys, t);
@@ -173,7 +177,7 @@ export default function LensingEventChart({ sys, t, onWatch }) {
         <div className="lensing-chart">
             <div className="lensing-chart-head">
                 <span>The event, from Earth</span>
-                <button className="button-secondary lensing-chart-watch" onClick={onWatch} title="Set the clock to late 2010, a month a second">Watch it</button>
+                <button className="button-secondary lensing-chart-watch" onClick={() => onWatch(WATCH_FROM, WATCH_RATE)} title="Set the clock to late 2010, a month a second">Watch it</button>
             </div>
             <div className="star-info-muted">How many times brighter the star behind looked</div>
             <LightCurve sys={sys} t={t} />

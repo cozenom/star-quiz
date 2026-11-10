@@ -13,7 +13,10 @@ import { buildOortCloud, OORT_LABEL_POSITION } from '../utils/oortCloud';
 import { ARM_LABELS, FADE_IN_LY as GALAXY_FADE_IN_LY, GALAXY_SEARCH, buildGalaxy, galaxyPose, maserInfo, maserPose } from '../utils/galaxy3d';
 import { buildNucleus } from '../utils/galacticNucleus';
 import { CMZ_GLSL, CMZ_STEPS, CND_GLSL, CND_STEPS, createCmz, createCnd } from '../utils/localDust';
-import { LENS_GLSL, createLensPass } from '../utils/blackHoleLens';
+import {
+    FAR_LENS_GLSL, FarStarsPass, LENS_GLSL, createLensPass, farLensBlend, farLensHoleAu, farLensImage, farLensOn, farLensUniforms, markFarLensed,
+} from '../utils/blackHoleLens';
+import { createLensSky } from '../utils/lensSky';
 import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { DUST_MAG_PER_TAU, createDustMap, dustMapSource } from '../utils/dustMap';
@@ -87,10 +90,9 @@ const GLARE_THRESHOLD = 1.6;
 // named stars are always labelled
 const LABEL_MAG_LIMIT = 2.5;
 const FLIGHT_SECONDS = 1.6;
-// A lone black hole's event, watched from its card: the clock from this
-// year, at this rate (s a second: a month)
-const WATCH_EVENT_FROM = 2010.75;
-const WATCH_EVENT_RATE = 2629800;
+// The lens's background all round (utils/lensSky) is drawn while a black
+// hole's shadow is at least this big on screen (radius, CSS px)
+const LENS_SKY_PX = 4;
 // OrbitControls zoom: each wheel notch scales the distance by 0.95^ZOOM_SPEED
 // (~23% at 5). Earth close-up to Orion is ~11 orders of magnitude, so the
 // default of 1 (5% a notch) took hundreds of notches.
@@ -213,19 +215,28 @@ const GALACTIC_POLES = [
 // The star Points sit at the layer origin, so mat3(modelViewMatrix) is just
 // the view's rotation. uUnitsPerPc: the layer's units per parsec (ly; the
 // Galactic Centre close-up's stars are in AU).
+// While a black hole's lens pass runs, the far stars (uFarLensOn: utils/
+// blackHoleLens FAR_LENS_GLSL) are drawn at their images, each a point:
+// brightened by its magnification, or (dimmed) its sprite shrunk to keep
+// its light in proportion.
 const STAR_VERTEX_GLSL = `
     uniform vec3 uCamHigh;
     uniform vec3 uCamLow;
     uniform float uUnitsPerPc;
     ${SPRITE_VERTEX_GLSL}
+    ${FAR_LENS_GLSL}
 
     void placeStar(vec3 pos, vec3 color, float absMag) {
         vec3 relative = (pos - uCamHigh) - uCamLow;
-        vec4 mvPosition = vec4(mat3(modelViewMatrix) * relative, 1.0);
-        float distPc = max(length(mvPosition.xyz) / uUnitsPerPc, 1e-9);
+        vec3 mv = mat3(modelViewMatrix) * relative;
+        float distPc = max(length(mv) / uUnitsPerPc, 1e-9);
         float mag = absMag + 5.0 * log(distPc) / log(10.0) - 5.0;
-        spriteFromMagnitude(mag, color);
-        gl_Position = projectionMatrix * mvPosition;
+        float mu = 1.0, gap = 1e9;
+        bool lensed = uFarLensOn > 0.5;
+        if (lensed) mv = farLensImage(mv, mu, gap);
+        spriteFromMagnitude(mag - 2.5 * log(max(mu, 1.0)) / log(10.0), color);
+        if (lensed) farLensSprite(mu, gap);
+        gl_Position = projectionMatrix * vec4(mv, 1.0);
     }
 `;
 
@@ -321,7 +332,7 @@ const starFragmentShader = `
     void main() {
         vec4 light = sprite();
         if (light.a <= 0.0) discard;
-        gl_FragColor = light;
+        gl_FragColor = vec4(light.rgb * light.a, light.a);  // premultiplied (farLensBlend)
     }
 `;
 
@@ -376,7 +387,7 @@ function setStarCamera(starCamera, position) {
 }
 
 function makeStarMaterial(vertexShader, pixelRatio, starCamera, maxSize, decoding = {}) {
-    return new THREE.ShaderMaterial({
+    const material = new THREE.ShaderMaterial({
         uniforms: {
             uPixelRatio: { value: pixelRatio },
             uMaxSize: { value: maxSize },
@@ -384,6 +395,7 @@ function makeStarMaterial(vertexShader, pixelRatio, starCamera, maxSize, decodin
             uGlare: { value: 0 },
             uGlareMag: { value: GLARE_MAG },
             uUnitsPerPc: { value: LY_PER_PARSEC },
+            ...farLensUniforms(false),
             ...starCamera,
             ...decoding,
         },
@@ -391,8 +403,9 @@ function makeStarMaterial(vertexShader, pixelRatio, starCamera, maxSize, decodin
         fragmentShader: starFragmentShader,
         transparent: true,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
     });
+    farLensBlend(material, false);
+    return material;
 }
 
 // shader: {vertexShader, uniforms} instead of the plain star shader's
@@ -1047,6 +1060,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // Every star Points, for the settings they share
         const starObjects = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints(), gc?.starPoints,
             ...(bh ? bh.farStars() : [])].filter(Boolean);
+        // The ones far off from any black hole's close-up (not its own
+        // stars), drawn as points at their images while its lens pass runs
+        // (utils/blackHoleLens FarStarsPass); a cluster's fast stars too
+        const farLensedStars = () => [stars, gaiaStars, gaiaFaint, sun, ...farPoints.flat(), ...haloPoints, ...clusterStarPoints(),
+            ...(bh ? bh.lensedStars() : [])].filter(Boolean);
 
         // The Sun, so you can find home after flying away
         // The Oort cloud: a model, far beyond the planets (see utils/oortCloud)
@@ -1144,6 +1162,10 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                             b.absMags.slice(from, to), pixelRatio, starCameraUniforms);
                         const gaia = part(0, split);
                         gaia.material.uniforms.uMinAlpha.value = stars.material.uniforms.uMinAlpha.value;
+                        // From inside a globular (a black hole's close-up in
+                        // its core) its giants crowd round as bright stars:
+                        // the Galactic Centre close-up's share of the glare
+                        if (kind === 'globulars') gaia.userData.glareShare = GC_GLARE_SHARE;
                         if (split < b.count) {
                             const young = part(split, b.count);
                             young.material.uniforms.uMaxSize.value = GC_STAR_MAX_PX;
@@ -1272,6 +1294,12 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // holes' lines over it
         const lens = createLensPass();
         composer.insertPass(lens.pass, layers.indexOf(bhLayer.layer) + 1);
+        // The far stars as points at their images, over its picture
+        const farStarsPass = new FarStarsPass([starLayer, bhLayer.layer]);
+        composer.insertPass(farStarsPass, layers.indexOf(bhLayer.layer) + 2);
+        // The far layers all round the camera, for rays it bends off the
+        // screen
+        const lensSky = createLensSky(renderer, [skyLayer, starLayer], { lite, hide: [hoverRing, selectedRing, earthMarkerFar] });
         const glarePass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, GLARE_THRESHOLD);
         glarePass.materialHighPassFilter.fragmentShader = glareHighPassShader;
         composer.addPass(glarePass);
@@ -1428,6 +1456,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // ---------- Screen-space star picking ----------
         const { positions, absMags, count } = starBuffers;
         const viewProjection = new THREE.Matrix4();
+        const pickScratch = new THREE.Vector3();
 
         // Visible stars near a screen point; prefers closer and brighter ones
         const pickStar = (clientX, clientY, radiusPx) => {
@@ -1439,10 +1468,15 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             viewProjection.multiplyMatrices(starCamera.projectionMatrix, starCamera.matrixWorldInverse);
             const e = viewProjection.elements;
             const cam = starCamera.position;
+            const lensed = farLensOn();
             let best = null;
             let bestScore = Infinity;
             for (let i = 0; i < count; i++) {
-                const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+                let x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+                if (lensed) {
+                    lensedLy(pickScratch.set(x, y, z), pickScratch);
+                    ({ x, y, z } = pickScratch);
+                }
                 const w = e[3] * x + e[7] * y + e[11] * z + e[15];
                 if (w <= 0) continue;  // behind the camera
                 const sx = ((e[0] * x + e[4] * y + e[8] * z + e[12]) / w + 1) / 2 * rect.width;
@@ -1847,8 +1881,14 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             a.x < b.x + b.w + LABEL_GAP_PX && b.x < a.x + a.w + LABEL_GAP_PX && a.y < b.y + b.h && b.y < a.y + a.h);
 
         const projected = new THREE.Vector3();
+        // A place in the star layer (ly) as it's drawn: lensed, where a black
+        // hole's lens pass bends it (its direct image)
+        const lensedLy = (position, out) => {
+            out.subVectors(position, starCamera.position);
+            return farLensImage(out, farLensHoleAu() / AU_PER_LY, out).add(starCamera.position);
+        };
         const toScreen = (position, width, height) => {
-            projected.copy(position).project(starCamera);
+            lensedLy(position, projected).project(starCamera);
             if (projected.z > 1 || Math.abs(projected.x) > 1.05 || Math.abs(projected.y) > 1.05) return null;
             return [(projected.x + 1) / 2 * width, (1 - projected.y) / 2 * height];
         };
@@ -2092,31 +2132,36 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                 setLabel(label, free ? [box.x, box.y] : null, 0, 0);
             }
             // The stellar black holes: each named while near enough, on its
-            // hole in its close-up, with its star named there too
+            // hole in its close-up, with its star (part true) or a
+            // cluster's fast stars (part: their index) named there too
             if (bh && !bhLabels.length) {
                 bhLabels = bh.systems.flatMap((sys, i) => [
-                    { index: i, el: makeLabelEl(sys.name, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
-                    sys.star && { index: i, star: true, el: makeLabelEl(`${sys.name}'s star`, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
+                    { index: i, part: false, el: makeLabelEl(sys.name, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
+                    sys.star && { index: i, part: true, el: makeLabelEl(`${sys.name}'s star`, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
+                    ...(sys.fast_stars ?? []).map((s, k) => ({ index: i, part: k, el: makeLabelEl(`Star ${s.id}`, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 })),
                 ].filter(Boolean));
                 for (const label of bhLabels) makeClickable(label.el, () => { pressedBh = label.index; });
             }
             for (const label of bhLabels) {
-                const selected = opts.selectedBh === label.index && !label.star;
+                const selected = opts.selectedBh === label.index && label.part === false;
                 if (selected !== label.selected) {
                     label.el.classList.toggle('selected', selected);
                     label.selected = selected;
                 }
                 const close = bh.active() === label.index && bh.closeUp() > 0.3;
-                const wanted = opts.showLabels && opts.showBlackHoles && (close || (!label.star && (selected || bh.named(label.index, starCamera.position))));
+                const wanted = opts.showLabels && opts.showBlackHoles && (close || (label.part === false && (selected || bh.named(label.index, starCamera.position))));
                 let p = null;
                 if (wanted) {
                     // In the close-up, from its layer's exact camera
-                    p = close ? bh.screenPoint(Boolean(label.star), width, height)
+                    p = close ? bh.screenPoint(label.part, width, height)
                         : toScreen(starPosition.fromArray(bh.systems[label.index].position_ly), width, height);
                 }
                 if (p) {
                     measure(label);
-                    const box = { x: p[0] + 8, y: p[1] - 8, w: label.w, h: label.h };
+                    // A cluster's hole named to its left in its close-up:
+                    // its fast stars' names go up and right of them
+                    const left = close && label.part === false && bh.systems[label.index].kind === 'cluster';
+                    const box = { x: left ? p[0] - 8 - label.w : p[0] + 8, y: p[1] - 8, w: label.w, h: label.h };
                     const free = selected || !hitsSky(box);
                     if (free) skyBoxes.push(box);
                     p = free ? [box.x, box.y] : null;
@@ -2570,6 +2615,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             if (bhLens) lens.update(bhLayer.layer.camera, true, yearOf(clockRef.current.time), bhLens);
             else lens.update(gcLayer.layer.camera, Boolean(gc) && gcLayer.layer.visible, yearOf(clockRef.current.time));
             bh?.updateLines(Boolean(bhLens) && lens.pass.enabled, lens.backgroundScale());
+            // The far stars: in the layers' own passes, or (lensed) the
+            // far stars' pass after the lens pass, weighted by its alpha
+            const farLensNow = farLensOn();
+            farStarsPass.enabled = farLensNow;
+            starCamera.layers.mask = farLensNow ? 1 : 3;
+            bhLayer.layer.camera.layers.mask = farLensNow ? 1 : 3;
+            farLensedStars().forEach((obj) => {
+                markFarLensed(obj);
+                farLensBlend(obj.material, farLensNow);
+            });
+            const shadowPx = lens.shadowAngle() * mount.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+            lensSky.update(camera.position, shadowPx > LENS_SKY_PX);
+            lens.setBackground(lensSky.texture());
             solar?.updateMinorMoonFade(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateTextures(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateRingView(solarCamera.position);
@@ -2619,6 +2677,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             starDisc.dispose();
             glarePass.dispose();
             lens.dispose();
+            lensSky.dispose();
             composer.dispose();
             renderer.dispose();
             // Give the GPU context back now, not when it's garbage
@@ -2906,9 +2965,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const setRate = (rate) => updateClock({ rate, playing: true });
     const goToNow = () => updateClock({ time: Date.now(), rate: 1, playing: true });
     const setTime = (ms) => updateClock({ time: THREE.MathUtils.clamp(ms, TIME_RANGE[0], TIME_RANGE[1]) });
-    // A lone black hole's microlensing event (2011): the clock from late
-    // 2010, a month a second (through it in ~20 s)
-    const watchEvent = () => updateClock({ time: msOf(WATCH_EVENT_FROM), rate: WATCH_EVENT_RATE, playing: true });
+    // A black hole card's "Watch": the clock from a year (Julian), running
+    // at a rate (s a second)
+    const watchFrom = (year, rate) => updateClock({ time: msOf(year), rate, playing: true });
 
     // Draw the selected constellation's stick figure (the flight to it is
     // started by whatever selected it)
@@ -3647,7 +3706,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     time={clockView.time}
                     onView={() => viewBh(selectedBh, 'system')}
                     onCloseUp={() => viewBh(selectedBh, 'hole')}
-                    onWatch={watchEvent}
+                    onWatch={watchFrom}
                     onClose={() => setSelectedBh(null)}
                 />
             )}
