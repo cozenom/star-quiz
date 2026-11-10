@@ -18,7 +18,7 @@ import { buildGalaxyDust, buildMilkyWayBand } from '../utils/milkyWayBand';
 import { farStarDecoding, farStarReach, farStarSource } from '../utils/farStars';
 import { DUST_MAG_PER_TAU, createDustMap, dustMapSource } from '../utils/dustMap';
 import { LANDMARK_KINDS, LANDMARK_NAMES, buildClusters, clusterInfo, clusterPose, decodeClusterStars, dwarfFloor } from '../utils/landmarks3d';
-import { GC_GLARE_SHARE, GC_STAR_GLOW_MAX, GC_STAR_MAX_PX, buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, yearOf } from '../utils/galacticCentre3d';
+import { GC_GLARE_SHARE, GC_STAR_GLOW_MAX, GC_STAR_MAX_PX, buildGalacticCentre, createGalacticCentreLayer, gcKindName, gcLabel, gcPose, gcSearchItems, msOf, yearOf } from '../utils/galacticCentre3d';
 import { bhLabel, bhPose, bhSearchItems, buildBlackHoles, createBlackHoleLayer } from '../utils/blackHoles3d';
 import {
     AU_PER_LY,
@@ -87,6 +87,10 @@ const GLARE_THRESHOLD = 1.6;
 // named stars are always labelled
 const LABEL_MAG_LIMIT = 2.5;
 const FLIGHT_SECONDS = 1.6;
+// A lone black hole's event, watched from its card: the clock from this
+// year, at this rate (s a second: a month)
+const WATCH_EVENT_FROM = 2010.75;
+const WATCH_EVENT_RATE = 2629800;
 // OrbitControls zoom: each wheel notch scales the distance by 0.95^ZOOM_SPEED
 // (~23% at 5). Earth close-up to Orion is ~11 orders of magnitude, so the
 // default of 1 (5% a notch) took hundreds of notches.
@@ -2091,8 +2095,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             if (bh && !bhLabels.length) {
                 bhLabels = bh.systems.flatMap((sys, i) => [
                     { index: i, el: makeLabelEl(sys.name, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
-                    { index: i, star: true, el: makeLabelEl(`${sys.name}'s star`, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
-                ]);
+                    sys.star && { index: i, star: true, el: makeLabelEl(`${sys.name}'s star`, 'universe-3d-label universe-3d-label-link'), shown: false, selected: false, w: 0, h: 0 },
+                ].filter(Boolean));
                 for (const label of bhLabels) makeClickable(label.el, () => { pressedBh = label.index; });
             }
             for (const label of bhLabels) {
@@ -2900,6 +2904,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     const setRate = (rate) => updateClock({ rate, playing: true });
     const goToNow = () => updateClock({ time: Date.now(), rate: 1, playing: true });
     const setTime = (ms) => updateClock({ time: THREE.MathUtils.clamp(ms, TIME_RANGE[0], TIME_RANGE[1]) });
+    // A lone black hole's microlensing event (2011): the clock from late
+    // 2010, a month a second (through it in ~20 s)
+    const watchEvent = () => updateClock({ time: msOf(WATCH_EVENT_FROM), rate: WATCH_EVENT_RATE, playing: true });
 
     // Draw the selected constellation's stick figure (the flight to it is
     // started by whatever selected it)
@@ -3504,7 +3511,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     </label>
                     <label
                         className="universe-3d-checkbox"
-                        title="Gaia BH1, BH2 and BH3, dormant black holes found from the wobble of the star going round each, and Cygnus X-1, V404 Cygni, MAXI J1820+070 and GRS 1915+105, fed by theirs, with discs and spin: on their measured orbits, moving with the clock; fly close to see the black hole's shadow and the light bent round it"
+                        title="Gaia BH1, BH2 and BH3, dormant black holes found from the wobble of the star going round each, and Cygnus X-1, V404 Cygni, MAXI J1820+070 and GRS 1915+105, fed by theirs, with discs and spin: on their measured orbits, moving with the clock; and OGLE-2011-BLG-0462, a lone black hole found by the starlight it bent; fly close to see the black hole's shadow and the light bent round it"
                     >
                         <input
                             type="checkbox"
@@ -3638,6 +3645,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     time={clockView.time}
                     onView={() => viewBh(selectedBh, 'system')}
                     onCloseUp={() => viewBh(selectedBh, 'hole')}
+                    onWatch={watchEvent}
                     onClose={() => setSelectedBh(null)}
                 />
             )}

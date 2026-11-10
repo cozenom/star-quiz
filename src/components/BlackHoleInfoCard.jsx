@@ -3,17 +3,20 @@ import { BH_JET_COLOR, BH_MARKER_COLOR, bhState } from '../utils/blackHoles3d';
 import { msOf, yearOf } from '../utils/galacticCentre3d';
 import { bvToColor } from '../utils/universe3d';
 import { Facts, Sources } from './GalaxyInfoCard';
+import LensingEventChart from './LensingEventChart';
 import MapLegend from './MapLegend';
 
 // A stellar black hole's system (black_holes.json systems[i], from
 // Star_Data/curated/black_holes.json via scripts/build_black_holes.py): the
 // black hole, its star and their orbit, and where they are at the clock's
-// date; a fed one's spin, disc and jet too. Uses the star and region cards'
-// styles (.star-info-*).
+// date; a fed one's spin, disc and jet too; a lone one (no star): the
+// microlensing event it was found by (LensingEventChart). Uses the star and
+// region cards' styles (.star-info-*).
 
 const fmt = (n) => Math.round(n).toLocaleString();
 const sig = (n, digits = 3) => Number(n.toPrecision(digits)).toLocaleString();
 const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
+const monthDay = (year) => new Date(msOf(year)).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 const monthYear = (year) => new Date(msOf(year)).toLocaleDateString(undefined, { year: 'numeric', month: 'short', timeZone: 'UTC' });
 const LIGHT_KM_S = 299792.458;
 // The star's sRGB tint as CSS
@@ -64,9 +67,56 @@ function fedRows(sys) {
     return rows;
 }
 
-// time: the clock (ms)
-export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, onClose }) {
+// A lone black hole's card (OGLE-2011-BLG-0462): no star or orbit; the
+// event, the star behind it, how its mass was measured
+function LoneCard({ sys, data, t, onView, onCloseUp, onWatch, onClose }) {
+    const hole = sys.black_hole;
+    const ev = sys.event;
+    const src = sys.source;
+    const hstMax = ev.hst.reduce((a, b) => (b.shift_mas > a.shift_mas ? b : a));
+    const hstLast = ev.hst[ev.hst.length - 1];
+    const rows = [
+        ['Distance', <>{fmt(sys.distance_ly)} ly
+            <span className="star-info-muted"> ± {fmt(sys.distance_err_ly)} · in {sys.constellation}, towards the Galaxy&apos;s centre</span></>],
+        ['Black hole', <>{hole.mass_msun} ± {hole.mass_err_msun} times the Sun&apos;s mass
+            <div className="star-info-muted">its event horizon {sig(2 * hole.horizon_km)} km across; its shadow, the dark disc you&apos;d see, {sig(2 * hole.shadow_km)} km; no light of its own seen (fainter than a star of 0.15 Suns)</div></>],
+        ['Alone', <>nothing found going round it
+            <div className="star-info-muted">{sys.companions.map(([how, what]) => `${what} (${how})`).join('; ')}</div></>],
+        ['The event', <>brightest {monthDay(ev.peak_year)}, {ev.a_max} times the star&apos;s own light
+            <div className="star-info-muted">alerted {monthDay(ev.alert_year)} by the MOA and OGLE surveys; the star within the Einstein ring {monthYear(ev.inside_years[0])} to {monthYear(ev.inside_years[1])}. From the ground it looked only ~20 times brighter: a brighter star 0.4&Prime; away blends with it</div></>],
+        ['Bent light', <>Einstein ring {ev.theta_e_mas} mas in radius
+            <div className="star-info-muted">its two images at most {sig(2 * ev.theta_e_mas, 2)} mas apart, too close for any telescope to split; Hubble saw them pull the star&apos;s image {hstMax.shift_mas.toFixed(1)} mas aside ({Math.floor(hstMax.year)}), still {hstLast.shift_mas.toFixed(2)} mas in {Math.floor(hstLast.year)}. That, and the brightening&apos;s timing and Earth&apos;s yearly swing in it, gave the mass</div></>],
+        ['Star behind', <>{src.type}, {fmt(src.distance_ly)} ly away
+            <span className="star-info-muted"> ± {fmt(src.distance_err_ly)}</span>
+            <div className="star-info-muted">{fmt(src.beyond_ly)} ly beyond the black hole; {fmt(src.teff_k)} K, {metalShare(src.fe_h)} of the Sun&apos;s share of metals; magnitude {src.mag_606.toFixed(1)} in visible light (dimmed by dust), {src.peak_mag_606} at the peak</div></>],
+        ['Its mass, by study', <>{sys.masses[sys.masses.length - 1][1]} Suns
+            <div className="star-info-muted">{sys.masses.map(([who, m]) => `${who}: ${m}`).join('; ')}. The low one fitted a neighbour star&apos;s light differently; with more Hubble data, all now give a black hole</div></>],
+        ['Moves', <>{sys.speed_local_km_s} ± {sys.speed_local_err_km_s} km/s against the stars round it
+            <div className="star-info-muted">faster than almost all of them: probably kicked when it formed; {sys.speed_km_s} km/s across our sky against the Sun ({sys.pm_mas_yr} mas a year; its speed towards or away from us isn&apos;t known). Drawn still, where it was in {sys.epoch}</div></>],
+    ];
+    return (
+        <div className="star-info region-info">
+            <button className="star-info-close" onClick={onClose} aria-label="Close">×</button>
+            <h3 className="star-info-title">{sys.name}</h3>
+            <div className="star-info-subtitle">{sys.title} · found {sys.found}</div>
+            <div className="star-info-actions">
+                <button className="button-secondary star-info-fly" onClick={onCloseUp} title="Right by the black hole: its shadow and the light bent round it">Close up</button>
+                <button className="button-primary star-info-fly" onClick={onView}>Fly there</button>
+            </div>
+            <p className="star-info-origin">{sys.about}</p>
+            <LensingEventChart sys={sys} t={t} onWatch={onWatch} />
+            <Facts rows={rows} />
+            <p className="star-info-muted star-info-origin">{data.about_lone} {data.drawn_lone}</p>
+            <Sources refs={sys.refs} />
+        </div>
+    );
+}
+
+// time: the clock (ms); onWatch (a lone hole's): run the clock through its
+// event
+export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, onWatch, onClose }) {
     const t = yearOf(time);
+    if (sys.kind === 'lone') return <LoneCard sys={sys} data={data} t={t} onView={onView} onCloseUp={onCloseUp} onWatch={onWatch} onClose={onClose} />;
     const state = bhState(sys, t);
     const o = sys.orbit;
     const hole = sys.black_hole;
@@ -120,6 +170,13 @@ export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, 
 
 // The close-up's key, shown while it is on screen
 export function BlackHoleLegend({ sys, showOrbits, onOpen }) {
+    if (sys.kind === 'lone') {
+        const items = [
+            { key: 'marker', swatch: <span className="universe-3d-swatch" style={{ background: 'transparent', border: `2px solid ${hex(BH_MARKER_COLOR)}` }} />, name: 'The black hole (marker, until its shadow is big enough to see)' },
+            { key: 'shadow', swatch: <span className="universe-3d-swatch" style={{ background: '#000', border: '1px solid #64748b' }} />, name: 'Its shadow (true size), light bent round it' },
+        ];
+        return <MapLegend title={sys.name} onTitle={onOpen} storageKey="universe3d.legend.bh" items={items} />;
+    }
     const isFed = sys.kind === 'fed';
     const items = [
         { key: 'star', swatch: <span className="universe-3d-swatch" style={{ background: starCss(sys) }} />, name: isFed ? 'Its star, its shape the space its gravity rules' : 'Its star, at its true brightness' },

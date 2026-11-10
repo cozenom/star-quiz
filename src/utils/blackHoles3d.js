@@ -5,9 +5,12 @@
 // clock. Dormant (kind 'dormant': Gaia BH1-3, found from the star's wobble
 // in Gaia's measurements) or fed (kind 'fed', X-ray binaries: Cygnus X-1,
 // V404 Cygni: the star's gas spiralling into a disc round the spinning
-// black hole). Each:
+// black hole), or lone (kind 'lone': OGLE-2011-BLG-0462, no star, found by
+// the light of a star behind it that it bent; its event is the card's,
+// bhEvent). Each:
 //   - from afar: the star, as a star (the star layer, at the system's
-//     place), the system named after its black hole
+//     place), the system named after its black hole (a lone one: its name
+//     only)
 //   - close up: its own scale layer (AU, origin at the centre of mass of
 //     the system nearest the camera): the star on its orbit (its sprite, and
 //     its real-size disc once that's big enough), the black hole swinging
@@ -24,7 +27,8 @@
 // along the orbit's axis), at the build's temperatures; its star here is
 // the Roche surface it fills or nearly fills (its shape in the black hole's
 // pull, darker where its surface gravity is weaker: T ~ g^beta), and a
-// line marks the radio jet's direction.
+// line marks the radio jet's direction. A lone hole's close-up is its
+// marker and its shadow.
 // Each system stays where Gaia measured it (its drift across the sky left
 // out, as the stars'), seen from Earth at the clock's date.
 //
@@ -103,6 +107,12 @@ export const BH_JET_COLOR = 0x67e8f9;
 const JET_LENGTH = 0.75;
 const JET_FADE = [0.6, 1.2];
 const JET_OPACITY = 0.45;
+// A lone hole: its close-up shows within this many rg (as a system's
+// orbit), its views this many rg out; its event's colour on its card
+// (LensingEventChart)
+const LONE_EXTENT_RG = 2000;
+const LONE_VIEW_RG = 2000;
+export const BH_EVENT_COLOR = 0xd97706;
 // The fed star's surface: limb darkening (as starDisc's, linear), and the
 // mesh's resolution
 const LIMB_DARKENING = 0.6;
@@ -117,14 +127,16 @@ const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const qScratch = new THREE.Vector3();
 export function bhSeparation(sys, t, out = new THREE.Vector3()) {
     const o = sys.orbit;
+    if (!o) return out.set(0, 0, 0);
     const E = eccentricAnomaly(2 * Math.PI * (t - o.tp) / o.period_yr, o.e);
     const b = Math.sqrt(1 - o.e * o.e);
     return out.fromArray(o.p).multiplyScalar(o.a_au * (Math.cos(E) - o.e))
         .addScaledVector(qScratch.fromArray(o.q), o.a_au * b * Math.sin(E));
 }
 // The hole's and the star's places from the centre of mass (AU)
-export const bhHoleAu = (sys, t, out = new THREE.Vector3()) => bhSeparation(sys, t, out).multiplyScalar(-sys.orbit.bh_share);
-export const bhStarAu = (sys, t, out = new THREE.Vector3()) => bhSeparation(sys, t, out).multiplyScalar(sys.orbit.star_share);
+// (a lone hole: at its place, no star)
+export const bhHoleAu = (sys, t, out = new THREE.Vector3()) => (sys.orbit ? bhSeparation(sys, t, out).multiplyScalar(-sys.orbit.bh_share) : out.set(0, 0, 0));
+export const bhStarAu = (sys, t, out = new THREE.Vector3()) => (sys.orbit ? bhSeparation(sys, t, out).multiplyScalar(sys.orbit.star_share) : out.set(0, 0, 0));
 
 // For a card, at year t: {separationAu, speedKmS (the star's against the
 // hole), nextPeri (year)}
@@ -135,6 +147,42 @@ export function bhState(sys, t) {
     const speed = Math.sqrt(Math.max(gm * (2 / r - 1 / o.a_au), 0)) * 4.740470464;
     const nextPeri = o.tp + Math.ceil((t - o.tp) / o.period_yr) * o.period_yr;
     return { separationAu: r, speedKmS: speed, nextPeri };
+}
+
+// A lone hole's microlensing event, seen from Earth at year t (the build's
+// path: the lens's place from the star behind, theta_E units, east and
+// north; daily through the event, coarser over Hubble's years), or null
+// outside it: {lens: [e, n], u (their separation, theta_E), magnification
+// (the star's two images together against the star alone), images: [[e, n,
+// magnification], ...] (from the lens, theta_E: outside the Einstein ring
+// on the star's side, inside it on the other), shiftMas (the images'
+// light-weighted centre from the star's true place)}
+export function bhEvent(sys, t) {
+    const ev = sys.event;
+    if (!ev) return null;
+    const at = (path, from, stepYr) => {
+        const x = (t - from) / stepYr;
+        const n = path.length / 2;
+        if (x < 0 || x > n - 1) return null;
+        const k = Math.min(Math.floor(x), n - 2);
+        const f = x - k;
+        return [0, 1].map(c => path[2 * k + c] * (1 - f) + path[2 * k + 2 + c] * f);
+    };
+    const lens = at(ev.fine, ev.fine_from, 1 / 365.25) ?? at(ev.coarse, ev.coarse_from, ev.coarse_step_d / 365.25);
+    if (!lens) return null;
+    const u = Math.max(Math.hypot(lens[0], lens[1]), 1e-9);
+    const root = Math.sqrt(u * u + 4);
+    const magnification = (u * u + 2) / (u * root);
+    // The star's direction from the lens
+    const sx = -lens[0] / u, sy = -lens[1] / u;
+    const plus = (u + root) / 2, minus = (u - root) / 2;
+    return {
+        lens,
+        u,
+        magnification,
+        images: [[sx * plus, sy * plus, (magnification + 1) / 2], [sx * minus, sy * minus, (magnification - 1) / 2]],
+        shiftMas: ev.theta_e_mas * u / (u * u + 2),
+    };
 }
 
 // The lens pass's bending of a ray leaving the camera r rg from the hole at
@@ -178,6 +226,7 @@ const firstLower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 // "a Sun-like star", "an orange subgiant"
 const withArticle = (s) => `${/^[aeiou]/i.test(s) ? 'an' : 'a'} ${firstLower(s)}`;
 export function bhLabel(sys) {
+    if (sys.kind === 'lone') return `${sys.name} · lone black hole of ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns, ${Math.round(sys.distance_ly).toLocaleString()} ly`;
     return `${sys.name} · black hole of ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns with ${withArticle(sys.star.type)}, ${Math.round(sys.distance_ly).toLocaleString()} ly`;
 }
 
@@ -188,6 +237,18 @@ export function bhPose(sys, view, t) {
     const centre = new THREE.Vector3(...sys.position_ly);
     const holeAu = bhHoleAu(sys, t);
     const target = centre.clone().addScaledVector(holeAu, 1 / AU_PER_LY);
+    const rgLone = sys.black_hole.rg_au;
+    if (sys.kind === 'lone') {
+        // From Earth's side, looking past it at the sky the star was
+        // behind
+        const from = new THREE.Vector3(...sys.sky.away).negate();
+        const au = (view === 'hole' ? HOLE_VIEW_RG : LONE_VIEW_RG) * rgLone;
+        return {
+            position: target.clone().addScaledVector(from, au / AU_PER_LY).toArray(),
+            target: target.toArray(),
+            minDistance: MIN_RG * rgLone / AU_PER_LY,
+        };
+    }
     const p = new THREE.Vector3(...sys.orbit.p);
     const n = p.clone().cross(new THREE.Vector3(...sys.orbit.q)).normalize();
     const rgAu = sys.black_hole.rg_au;
@@ -232,7 +293,11 @@ const BH_TERMS = ['black hole', 'stellar black hole'];
 const KIND_TERMS = {
     dormant: ['dormant black hole', 'nearest black hole', 'Gaia black hole'],
     fed: ['X-ray binary', 'accretion disc', 'accretion disk', 'spinning black hole', 'microquasar'],
+    lone: ['microlensing', 'gravitational lensing', 'Einstein ring'],
 };
+const searchSublabel = (sys) => (sys.kind === 'lone'
+    ? `Lone black hole · ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns, no star, ${Math.round(sys.distance_ly).toLocaleString()} ly`
+    : `${sys.kind === 'fed' ? 'Fed black hole' : 'Black hole'} · ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns with ${withArticle(sys.star.type)}, ${Math.round(sys.distance_ly).toLocaleString()} ly`);
 export function bhSearchItems(data, normalize) {
     return data.systems.flatMap((sys, i) => [{
         type: 'bh',
@@ -240,7 +305,7 @@ export function bhSearchItems(data, normalize) {
         index: i,
         view: 'system',
         label: sys.name,
-        sublabel: `${sys.kind === 'fed' ? 'Fed black hole' : 'Black hole'} · ${Number(sys.black_hole.mass_msun.toPrecision(2))} Suns with ${withArticle(sys.star.type)}, ${Math.round(sys.distance_ly).toLocaleString()} ly`,
+        sublabel: searchSublabel(sys),
         terms: [...new Set([sys.name, ...sys.aka, ...BH_TERMS, ...KIND_TERMS[sys.kind] ?? []])].map(normalize),
         sortKey: -6,
     }, {
@@ -387,10 +452,14 @@ export function createBlackHoleLayer() {
 export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars, makeFarStars, farScene, starCamera, bvToColor }) {
     const systems = data.systems;
     const centres = systems.map(sys => new THREE.Vector3(...sys.position_ly));
-    const colours = systems.map(sys => bvToColor(sys.star.b_v));
+    const colours = systems.map(sys => (sys.star ? bvToColor(sys.star.b_v) : null));
+    // How far out a system's close-up reaches (AU): its star's farthest from
+    // the hole, a lone hole's LONE_EXTENT_RG
+    const extentAu = (sys) => (sys.orbit ? sys.orbit.apoapsis_au : LONE_EXTENT_RG * sys.black_hole.rg_au);
 
-    // From afar: each star at its system's place
+    // From afar: each star at its system's place (a lone hole: nothing)
     const far = systems.map((sys, i) => {
+        if (!sys.star) return null;
         const points = makeFarStars(new Float32Array(sys.position_ly), new Float32Array(colours[i]), new Float32Array([sys.star.abs_mag]));
         points.material.uniforms.uMagOffset = { value: 0 };
         points.frustumCulled = false;
@@ -470,6 +539,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
     // on the hole by its matrix
     const orbitLines = systems.map((sys, i) => {
         const o = sys.orbit;
+        if (!o) return null;
         const pts = new Float32Array(ORBIT_POINTS * 3);
         const b = Math.sqrt(1 - o.e * o.e);
         for (let k = 0; k < ORBIT_POINTS; k++) {
@@ -510,6 +580,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
 
     let active = -1;
     let closeUp = 0;
+    let shownAll = false;                 // the black holes shown (update's opts.visible)
     let shadowPx = 0;
     let separation = 0;                   // AU, this frame
     const hole = new THREE.Vector3();     // AU from the active system's centre of mass, this frame
@@ -533,6 +604,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
         // or null), view (riding along with a hole: {index, at (the camera
         // from it, ly, exact)}, or null)}
         update(camera, t, height, opts) {
+            shownAll = opts.visible;
             let nearest = Infinity;
             let next = -1;
             centres.forEach((c, i) => {
@@ -552,8 +624,9 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             bhHoleAu(sys, t, hole);
             bhStarAu(sys, t, star);
             const toCentre = Math.max(cameraAu.length(), 1e-12);
-            closeUp = opts.visible ? THREE.MathUtils.smoothstep(2 * sys.orbit.apoapsis_au * focal / toCentre, ...CLOSE_UP_PX) : 0;
+            closeUp = opts.visible ? THREE.MathUtils.smoothstep(2 * extentAu(sys) * focal / toCentre, ...CLOSE_UP_PX) : 0;
             far.forEach((points, i) => {
+                if (!points) return;
                 points.visible = opts.visible;
                 points.material.uniforms.uMagOffset.value = i === next ? FADE_MAG * closeUp : 0;
             });
@@ -566,14 +639,30 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             }
             if (next !== active) {
                 active = next;
-                starPoints.geometry.attributes.color.array.set(colours[active]);
-                starPoints.geometry.attributes.color.needsUpdate = true;
-                starPoints.geometry.attributes.absMag.array[0] = sys.star.abs_mag;
-                starPoints.geometry.attributes.absMag.needsUpdate = true;
-                disc.material.uniforms.uColor.value.fromArray(colours[active]);
-                disc.scale.setScalar(sys.star.radius_au);
-                orbitLines.forEach((line, i) => { line.visible = i === active; });
+                if (sys.star) {
+                    starPoints.geometry.attributes.color.array.set(colours[active]);
+                    starPoints.geometry.attributes.color.needsUpdate = true;
+                    starPoints.geometry.attributes.absMag.array[0] = sys.star.abs_mag;
+                    starPoints.geometry.attributes.absMag.needsUpdate = true;
+                    disc.material.uniforms.uColor.value.fromArray(colours[active]);
+                    disc.scale.setScalar(sys.star.radius_au);
+                }
+                orbitLines.forEach((line, i) => { if (line) line.visible = i === active; });
                 fed.forEach((f, i) => { if (f?.mesh && i !== active) f.mesh.visible = false; });
+            }
+            starPoints.visible = Boolean(sys.star);
+            if (!sys.star) {
+                // A lone hole: its marker
+                disc.visible = false;
+                jet.visible = false;
+                const toHole = Math.max(cameraAu.distanceTo(hole), 1e-12);
+                shadowPx = sys.black_hole.shadow_km / KM_PER_AU * focal / toHole;
+                hole.toArray(markerGeometry.attributes.position.array);
+                markerGeometry.attributes.position.needsUpdate = true;
+                markerMaterial.uniforms.uFade.value = closeUp * (1 - THREE.MathUtils.smoothstep(shadowPx, ...MARKER_SHADOW_PX));
+                layer.near = Math.max((toHole - sys.black_hole.shadow_km / KM_PER_AU) * NEAR_FRACTION, 1e-9);
+                layer.far = toCentre + 1;
+                return;
             }
             star.toArray(starPositions);
             starPoints.geometry.attributes.position.needsUpdate = true;
@@ -682,7 +771,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
         // false) or its star's direct image (true) is on screen, from this
         // layer's camera: [x, y] (CSS px), or null off screen
         screenPoint(isStar, width, height) {
-            if (active < 0) return null;
+            if (active < 0 || (isStar && !systems[active].star)) return null;
             const p = isStar ? directImage(cameraAu, hole, star, systems[active].black_hole.rg_au, screenScratch) : screenScratch.copy(hole);
             p.project(layer.camera);
             if (p.z > 1 || Math.abs(p.x) > 1.05 || Math.abs(p.y) > 1.05) return null;
@@ -708,10 +797,10 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
                 }
             };
             systems.forEach((sys, i) => {
-                if (!far[i].visible) return;
+                if (far[i] ? !far[i].visible : !shownAll) return;
                 if (i === active && closeUp > 0.3) {
                     test(i, this.holeLy(i, t, p));
-                    test(i, this.starImageLy(i, t, cam.position, p));
+                    if (sys.star) test(i, this.starImageLy(i, t, cam.position, p));
                 } else if (this.named(i, cam.position)) {
                     test(i, p.copy(centres[i]));
                 }
@@ -737,6 +826,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
 
         dispose() {
             far.forEach((points) => {
+                if (!points) return;
                 farScene.remove(points);
                 points.geometry.dispose();
                 points.material.dispose();
@@ -746,6 +836,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             disc.geometry.dispose();
             disc.material.dispose();
             orbitLines.forEach((line) => {
+                if (!line) return;
                 line.geometry.dispose();
                 line.material.dispose();
             });

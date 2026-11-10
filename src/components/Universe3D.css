@@ -1157,3 +1157,31 @@ button.map-legend-title {
 button.galaxy-object {
     display: block;
 }
+
+/* A lone black hole's microlensing event on its card (LensingEventChart) */
+.lensing-chart {
+    margin: 0.75rem 0;
+    padding: 0.6rem 0.6rem 0.5rem;
+    background: rgba(2, 6, 23, 0.45);
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 8px;
+}
+
+.lensing-chart svg {
+    display: block;
+    margin: 0.2rem 0 0.4rem;
+}
+
+.lensing-chart-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.3rem;
+    font-size: 0.9rem;
+}
+
+.lensing-chart-watch {
+    min-height: 1.75rem;
+    padding: 0.15rem 0.6rem;
+    font-size: 0.8rem;
+}
