@@ -989,6 +989,21 @@ function discAdapt(dsc, rRg) {
     const rel = luma(planckRGB(t)) / luma(planckRGB(dsc.teff));
     return Math.max(rel, 1) ** -DISC_PERCEPT;
 }
+// A stellar disc's edges (rg; discTable's disc: rIn, rOut, rIsco): from
+// (nothing inside), solid from (0: from the start; truncated, V404 Cygni
+// quiet: it fades in), solid to, to (nothing outside). As the pass's
+// discOpacity without its turbulence's ragged edges (blackHoles3d's lines
+// in front of it take this)
+export function discEdgesRg(dsc) {
+    const truncated = dsc.rIn > 2 * dsc.rIsco;
+    return {
+        from: truncated ? dsc.rIn : Math.max(dsc.rIn, dsc.rIsco),
+        solidFrom: truncated ? dsc.rIn * DISC_EDGE_FADE_IN : 0,
+        solidTo: dsc.rOut * (1 - DISC_EDGE_FADE_OUT),
+        to: dsc.rOut,
+    };
+}
+
 export function createLensPass() {
     let rgAu = 0;
     let flow = null;
@@ -1117,8 +1132,8 @@ export function createLensPass() {
                     u.uDiscTilt.value = dn.z < Math.cos(THREE.MathUtils.degToRad(1)) ? 1 : 0;
                     // Truncated far outside the innermost stable orbit (V404
                     // Cygni, quiet): its inner edge fades too
-                    const truncated = dsc.rIn > 2 * dsc.rIsco;
-                    u.uDiscEdge.value.set(dsc.rOut * (1 - DISC_EDGE_FADE_OUT), truncated ? dsc.rIn * DISC_EDGE_FADE_IN : 0);
+                    const edges = discEdgesRg(dsc);
+                    u.uDiscEdge.value.set(edges.solidTo, edges.solidFrom);
                     u.uDiscT.value = dsc.texture;
                     u.uDiscTX.value.copy(dsc.tx);
                     u.uDiscLook.value.set(dsc.look, dsc.star, discAdapt(dsc, r));
@@ -1180,6 +1195,9 @@ export function createLensPass() {
         },
         // How much the hot spot shows now (0..1)
         spotShown: () => spotLevel,
+        // What the pass scales the background by (a disc's view: the eye's
+        // adaptation; else 1): what's drawn over it after should match
+        backgroundScale: () => (pass.enabled && u.uKerr.value > 0.5 ? u.uDiscLook.value.z : 1),
         dispose() {
             u.uTable.value.dispose();
             pass.dispose();

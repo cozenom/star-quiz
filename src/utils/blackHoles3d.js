@@ -29,6 +29,12 @@
 // pull, darker where its surface gravity is weaker: T ~ g^beta), and a
 // line marks the radio jet's direction. A lone hole's close-up is its
 // marker and its shadow.
+// The orbit and jet lines are bent with the rest, so the pass's disc and
+// shadow cover them, also where they're in front: those parts are drawn
+// again after the pass (the lines layer: unbent, there the bending is
+// slight), each line's pixel where the straight way on from it meets the
+// disc (its opacity there) or the shadow, and not where the star or the
+// disc is in front of it.
 // Each system stays where Gaia measured it (its drift across the sky left
 // out, as the stars'), seen from Earth at the clock's date.
 //
@@ -39,7 +45,7 @@
 // the lens pass and the close-up's names take that.
 
 import * as THREE from 'three';
-import { B_CRIT, deflection, discLook, discTable } from './blackHoleLens';
+import { B_CRIT, deflection, discEdgesRg, discLook, discTable } from './blackHoleLens';
 import { createLayer } from './layers3d';
 import { AU_PER_PC, eccentricAnomaly } from './galacticCentre3d';
 import { makeStarDiscMesh } from './starDisc';
@@ -435,13 +441,83 @@ const markerFragmentShader = /* glsl */ `
     }
 `;
 
+// The lines drawn again after the lens pass where its disc or shadow is
+// behind them (see the header): the straight way on from each pixel of the
+// line, in view space (AU); the line's colour, scaled as the pass scales
+// what it bends
+const lineOverVertexShader = /* glsl */ `
+    attribute float fade;
+    varying vec3 vView;
+    varying float vFade;
+    void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vView = mv.xyz;
+        vFade = fade;
+        gl_Position = projectionMatrix * mv;
+    }
+`;
+const lineOverFragmentShader = /* glsl */ `
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    uniform vec4 uHole;      // the hole (view space, AU), its rg (AU)
+    uniform vec3 uDiscN;     // the disc's axis (view space)
+    uniform vec4 uDiscR;     // its edges (AU): from, to (0: no disc), solid to, solid from (0: from the start)
+    uniform vec4 uStar;      // the star's ball (view space, AU), its radius (AU; 0: none)
+    uniform float uScale;    // the pass's background scale
+    varying vec3 vView;
+    varying float vFade;
+    float discCover(float r) {
+        if (r < uDiscR.x) return 0.0;
+        float o = 1.0 - smoothstep(uDiscR.z, uDiscR.y, r);
+        if (uDiscR.w > 0.0) o *= smoothstep(uDiscR.x, uDiscR.w, r);
+        return o;
+    }
+    void main() {
+        float L = length(vView);
+        vec3 D = vView / L;
+        // Where the way on enters the star
+        float tStar = 1e30;
+        if (uStar.w > 0.0) {
+            float b = dot(uStar.xyz, D);
+            float q = b * b - (dot(uStar.xyz, uStar.xyz) - uStar.w * uStar.w);
+            if (q > 0.0 && b + sqrt(q) > 0.0) tStar = max(b - sqrt(q), 0.0);
+        }
+        if (tStar < L) discard;
+        // The shadow behind it: the ray's impact parameter (rg, as the pass)
+        // under the critical one, its closest approach past the line
+        vec3 h = uHole.xyz;
+        float sc = dot(h, D);
+        float rc = length(h);
+        float b = length(h - D * sc) / uHole.w / sqrt(max(1.0 - 2.0 * uHole.w / rc, 1e-6));
+        float behind = sc > L && sc < tStar && b < ${B_CRIT.toFixed(6)} ? 1.0 : 0.0;
+        // The disc: in front, the line seen through it (the bent line shows
+        // that already); behind, covering it
+        float front = 1.0;
+        float dn = dot(D, uDiscN);
+        if (uDiscR.y > 0.0 && abs(dn) > 1e-9) {
+            float t = dot(h, uDiscN) / dn;
+            if (t > 0.0) {
+                float o = discCover(length(D * t - h));
+                if (t < L) front = 1.0 - o;
+                else if (t < tStar) behind = 1.0 - (1.0 - behind) * (1.0 - o);
+            }
+        }
+        float a = uOpacity * vFade * front * behind;
+        if (a < 0.002) discard;
+        gl_FragColor = vec4(uColor * uScale, a);
+    }
+`;
+
 // The close-up's layer (AU), made with the view's others; its origin moves
-// to the system nearest the camera
+// to the system nearest the camera. lines: the same, drawn after the lens
+// pass (the lines over its disc and shadow)
 export function createBlackHoleLayer() {
     const origin = new THREE.Vector3();
     const layer = createLayer({ name: 'black holes', unit: 1 / AU_PER_LY, origin: () => origin, near: 1e-6, far: 100 });
     layer.visible = false;
-    return { layer, origin };
+    const lines = createLayer({ name: 'black holes, lines over the lens', unit: 1 / AU_PER_LY, origin: () => origin, near: 1e-6, far: 100 });
+    lines.visible = false;
+    return { layer, lines, origin };
 }
 
 // layer, origin: createBlackHoleLayer(); data: black_holes.json;
@@ -449,7 +525,7 @@ export function createBlackHoleLayer() {
 // uUnitsPerPc set here; camera uniforms starCamera, set each frame:
 // syncStarCamera); makeFarStars likewise for the star layer (ly), added to
 // farScene. Both shaders take a uMagOffset (set here, each Points' own).
-export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars, makeFarStars, farScene, starCamera, bvToColor }) {
+export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { makeStars, makeFarStars, farScene, starCamera, bvToColor }) {
     const systems = data.systems;
     const centres = systems.map(sys => new THREE.Vector3(...sys.position_ly));
     const colours = systems.map(sys => (sys.star ? bvToColor(sys.star.b_v) : null));
@@ -525,6 +601,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
     const jetRgb = new THREE.Color().setHex(BH_JET_COLOR).toArray();
     jetGeometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array([
         ...jetRgb, 1, ...jetRgb, 0, ...jetRgb, 1, ...jetRgb, 0]), 4));
+    jetGeometry.setAttribute('fade', new THREE.BufferAttribute(new Float32Array([1, 0, 1, 0]), 1));
     const jet = new THREE.LineSegments(jetGeometry, new THREE.LineBasicMaterial({
         vertexColors: true, transparent: true, opacity: 0, depthWrite: false,
     }));
@@ -549,6 +626,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
         }
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+        geometry.setAttribute('fade', new THREE.BufferAttribute(new Float32Array(ORBIT_POINTS).fill(1), 1));
         const color = new THREE.Color().setRGB(...colours[i], THREE.SRGBColorSpace);
         const line = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0, depthWrite: false }));
         const p = new THREE.Vector3(...o.p);
@@ -560,6 +638,33 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
         layer.scene.add(line);
         return line;
     });
+    // The lines again, over the lens pass (see the header): each one's
+    // copy, sharing its geometry, placed as it is each frame
+    const overShared = {
+        uHole: { value: new THREE.Vector4() },
+        uDiscN: { value: new THREE.Vector3(0, 0, 1) },
+        uDiscR: { value: new THREE.Vector4() },
+        uStar: { value: new THREE.Vector4() },
+        uScale: { value: 1 },
+    };
+    const lineOver = (source, color) => {
+        const over = new (source.isLineLoop ? THREE.LineLoop : THREE.LineSegments)(source.geometry, new THREE.ShaderMaterial({
+            uniforms: { ...overShared, uColor: { value: color }, uOpacity: { value: 0 } },
+            vertexShader: lineOverVertexShader,
+            fragmentShader: lineOverFragmentShader,
+            transparent: true,
+            depthWrite: false,
+            depthTest: false,
+        }));
+        over.matrixAutoUpdate = false;
+        over.frustumCulled = false;
+        over.visible = false;
+        lines.scene.add(over);
+        return over;
+    };
+    const orbitOvers = orbitLines.map(line => (line ? lineOver(line, line.material.color) : null));
+    const jetOver = lineOver(jet, new THREE.Color().setHex(BH_JET_COLOR));
+    const overView = new THREE.Vector3();
     const markerGeometry = new THREE.BufferGeometry();
     markerGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
     const markerMaterial = new THREE.ShaderMaterial({
@@ -631,6 +736,7 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
                 points.material.uniforms.uMagOffset.value = i === next ? FADE_MAG * closeUp : 0;
             });
             layer.visible = closeUp > 0;
+            lines.visible = false;
             if (!layer.visible) {
                 active = -1;
                 shadowPx = 0;
@@ -732,6 +838,45 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             const closest = Math.min(toHole - sys.black_hole.shadow_km / KM_PER_AU, toStar - starOut);
             layer.near = Math.max(closest * NEAR_FRACTION, 1e-9);
             layer.far = toCentre + 2 * apo + JET_LENGTH * separation + 1;
+            lines.near = layer.near;
+            lines.far = layer.far;
+        },
+
+        // After the lens pass's update (its camera this layer's, synced):
+        // the lines over its disc and shadow. lensOn: the pass is on, for
+        // the active hole; scale: its backgroundScale()
+        updateLines(lensOn, scale) {
+            lines.visible = false;
+            if (!lensOn || active < 0 || !layer.visible) return;
+            const sys = systems[active];
+            if (!sys.orbit) return;
+            const f = fed[active];
+            const view = layer.camera.matrixWorldInverse;
+            overView.copy(hole).applyMatrix4(view);
+            overShared.uHole.value.set(overView.x, overView.y, overView.z, sys.black_hole.rg_au);
+            overView.copy(star).applyMatrix4(view);
+            overShared.uStar.value.set(overView.x, overView.y, overView.z,
+                f ? sys.star.roche.r_vol * separation : sys.star.radius_au);
+            if (f) {
+                overShared.uDiscN.value.copy(f.axis).transformDirection(view);
+                const e = discEdgesRg(f.disc);
+                const rg = sys.black_hole.rg_au;
+                overShared.uDiscR.value.set(e.from * rg, e.to * rg, e.solidTo * rg, e.solidFrom * rg);
+            } else {
+                overShared.uDiscR.value.set(0, 0, 0, 0);
+            }
+            overShared.uScale.value = scale;
+            const sync = (over, source) => {
+                over.visible = source.visible;
+                if (!over.visible) return;
+                over.matrix.copy(source.matrix);
+                over.matrixWorldNeedsUpdate = true;
+                over.material.uniforms.uOpacity.value = source.material.opacity;
+            };
+            orbitOvers.forEach((over) => { if (over) over.visible = false; });
+            sync(orbitOvers[active], orbitLines[active]);
+            sync(jetOver, jet);
+            lines.visible = orbitOvers[active].visible || jetOver.visible;
         },
 
         // The active hole for the lens pass ({at: AU in this layer, rgAu,
@@ -850,6 +995,8 @@ export function buildBlackHoles({ layer, origin }, data, pixelRatio, { makeStars
             });
             jetGeometry.dispose();
             jet.material.dispose();
+            orbitOvers.forEach(over => over?.material.dispose());
+            jetOver.material.dispose();
         },
     };
 }

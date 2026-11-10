@@ -863,7 +863,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // The stellar black holes' close-up (AU, at the nearest one's centre
         // of mass), before the lens pass: its star's light is bent too
         const bhLayer = createBlackHoleLayer();
-        const layers = [skyLayer, starLayer, bhLayer.layer, gcLayer.layer, starDisc.layer, solarLayer];
+        const layers = [skyLayer, starLayer, bhLayer.layer, bhLayer.lines, gcLayer.layer, starDisc.layer, solarLayer];
         const scene = starLayer.scene;
         const starCamera = starLayer.camera;  // for picking and labels
         const solarCamera = solarLayer.camera;
@@ -1268,7 +1268,8 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // A black hole's lensing of the background (utils/blackHoleLens), Sgr
         // A*'s or a stellar one's: after the sky, star and stellar black
         // holes' layers, before the Galactic Centre close-up's (whose stars
-        // are lensed one by one in their shader)
+        // are lensed one by one in their shader) and the stellar black
+        // holes' lines over it
         const lens = createLensPass();
         composer.insertPass(lens.pass, layers.indexOf(bhLayer.layer) + 1);
         const glarePass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, GLARE_THRESHOLD);
@@ -2568,6 +2569,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
             const bhLens = bh?.lensTarget();
             if (bhLens) lens.update(bhLayer.layer.camera, true, yearOf(clockRef.current.time), bhLens);
             else lens.update(gcLayer.layer.camera, Boolean(gc) && gcLayer.layer.visible, yearOf(clockRef.current.time));
+            bh?.updateLines(Boolean(bhLens) && lens.pass.enabled, lens.backgroundScale());
             solar?.updateMinorMoonFade(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateTextures(solarCamera.position, mount.clientHeight, camera.fov);
             solar?.updateRingView(solarCamera.position);
