@@ -28,7 +28,8 @@
 // along the orbit's axis), at the build's temperatures; its star here is
 // the Roche surface it fills or nearly fills (its shape in the black hole's
 // pull, darker where its surface gravity is weaker: T ~ g^beta), and a
-// line marks the radio jet's direction. A lone hole's close-up is its
+// line marks the radio jet's direction where a jet has been seen resolved
+// (sys.jet; most quiet ones have none). A lone hole's close-up is its
 // marker and its shadow; a cluster's, the fast stars round it too (the
 // cluster's other stars are its own layer's, utils/landmarks3d).
 // The orbit and jet lines are bent with the rest, so the pass's disc and
@@ -868,8 +869,10 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
             su.uMaxSize.value = THREE.MathUtils.lerp(spriteMaxPx, SPRITE_LENSED_PX, lensed);
             su.uGlowMax.value = THREE.MathUtils.lerp(1, 0.001, lensed);
             starPoints.material.depthTest = lensed < 0.5 || starPx > 2;
-            // The jet's line, on the hole, gone close to it
-            if (f) {
+            // The jet's line, on the hole, gone close to it (only where a
+            // jet has been seen resolved: its direction measured)
+            const hasJet = Boolean(f && sys.jet);
+            if (hasJet) {
                 jetE1.crossVectors(f.spin, Math.abs(f.spin.y) < 0.9 ? Y_AXIS : X_AXIS).normalize();
                 jetE2.crossVectors(f.spin, jetE1);
                 jet.matrix.makeBasis(jetE1, jetE2, f.spin).scale(scaleBy.setScalar(JET_LENGTH * separation)).setPosition(hole);
@@ -877,7 +880,7 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
                 jet.material.opacity = JET_OPACITY * closeUp * (opts.orbits || opts.selected === active ? 1 : 0)
                     * THREE.MathUtils.smoothstep(toHole / separation, ...JET_FADE);
             }
-            jet.visible = Boolean(f) && jet.material.opacity > 0.003;
+            jet.visible = hasJet && jet.material.opacity > 0.003;
             // The orbit line, on the hole
             const line = orbitLines[active];
             const apo = sys.orbit.apoapsis_au;
