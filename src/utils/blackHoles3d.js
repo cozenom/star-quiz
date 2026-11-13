@@ -29,7 +29,11 @@
 // the Roche surface it fills or nearly fills (its shape in the black hole's
 // pull, darker where its surface gravity is weaker: T ~ g^beta), and a
 // line marks the radio jet's direction where a jet has been seen resolved
-// (sys.jet; most quiet ones have none). A lone hole's close-up is its
+// (sys.jet; most quiet ones have none). A star filling its lobe spills a
+// stream from L1 to the disc's rim (sys.stream, the build's ballistic path),
+// drawn as see-through as its gas is (nearly invisible to the eye), or as
+// in hydrogen light (opts.halpha). Its hot spot on the disc's rim isn't
+// drawn (the card gives it): as a dot it read as a star. A lone hole's close-up is its
 // marker and its shadow; a cluster's, the fast stars round it too (the
 // cluster's other stars are its own layer's, utils/landmarks3d).
 // The orbit and jet lines are bent with the rest, so the pass's disc and
@@ -454,6 +458,74 @@ const rocheFragmentShader = /* glsl */ `
     }
 `;
 
+// The stream from a fed star (the build's: ballistic from L1 to the disc's
+// rim, Lubow & Shu 1975), a tube in the star's frame (as the Roche surface's:
+// separations, x towards the hole, z the orbit's axis). As the eye sees it:
+// gas at the star's temperature, as see-through as its optical depth there
+// (tau across it, the line of sight's share by the surface's slant): the
+// star's surface brightness times 1 - exp(-tau). In hydrogen light (Hα, the
+// option): how telescopes see it in emission lines, the brightness ours
+// (falling with the gas's column as it speeds up, the cube root). Past the disc's rim (sys.stream.rim, its share
+// along it) the part that overflows the rim, over and under the disc's faces
+// to its closest approach to the hole (Lubow 1989): fading to nothing by
+// there (ours: how much overflows isn't measured). With the lens pass on,
+// drawn again after it where the disc's behind, as the lines are (and the
+// overflow on its faces)
+const STREAM_SEGMENTS = [160, 10];
+const H_ALPHA_RGB = [1.0, 0.06, 0.1];
+const streamVertexShader = /* glsl */ `
+    attribute float tau;
+    attribute float column;
+    attribute float along;
+    varying vec3 vNormal;
+    varying vec3 vView;
+    varying vec3 vPos;
+    varying float vTau;
+    varying float vColumn;
+    varying float vAlong;
+    void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalize(normalMatrix * normal);
+        vView = normalize(-mvPosition.xyz);
+        vPos = mvPosition.xyz;
+        vTau = tau;
+        vColumn = column;
+        vAlong = along;
+        gl_Position = projectionMatrix * mvPosition;
+    }
+`;
+const streamFragment = (over) => /* glsl */ `
+    uniform vec3 uColor;     // the star's surface (linear), the gas's temperature its
+    uniform vec3 uHalpha;    // the Hα view's colour (linear)
+    uniform float uMode;     // 0: as the eye sees it, 1: in hydrogen light
+    uniform float uFade;
+    uniform float uRim;      // the share along it where it reaches the disc's rim
+    uniform float uSurface;  // its half width (AU): on the disc's faces within it
+    varying vec3 vNormal;
+    varying vec3 vView;
+    varying vec3 vPos;
+    varying float vTau;
+    varying float vColumn;
+    varying float vAlong;
+    ${over ? OVER_COVER : 'const float uScale = 1.0;'}
+    void main() {
+        float slant = abs(dot(normalize(vNormal), normalize(vView)));
+        float a;
+        vec3 c;
+        if (uMode < 0.5) {
+            a = 1.0 - exp(-vTau * slant);
+            c = uColor;
+        } else {
+            a = 0.85 * pow(vColumn, 1.0 / 3.0) * sqrt(slant);
+            c = uHalpha;
+        }
+        a *= uFade * (1.0 - smoothstep(uRim, 1.0, vAlong));
+        ${over ? 'a *= overCover(vPos, uSurface);' : ''}
+        if (a < 0.0005) discard;
+        a = min(a, 1.0);
+        gl_FragColor = vec4(c * a * uScale, a);   // premultiplied
+    }
+`;
 const markerVertexShader = /* glsl */ `
     uniform float uSize;
     void main() {
@@ -490,25 +562,26 @@ const lineOverVertexShader = /* glsl */ `
         gl_Position = projectionMatrix * mv;
     }
 `;
-const lineOverFragmentShader = /* glsl */ `
-    uniform vec3 uColor;
-    uniform float uOpacity;
+// How much of a point (view space) to draw again over the pass: where the
+// pass's shadow or disc is behind it (the layer's own drawing, under the
+// pass, shows elsewhere), less the disc in front; none behind the star.
+// surface (AU): a point that near the disc's plane is on its face, over it
+// (the stream's overflow, over and under its faces)
+const OVER_COVER = /* glsl */ `
     uniform vec4 uHole;      // the hole (view space, AU), its rg (AU)
     uniform vec3 uDiscN;     // the disc's axis (view space)
     uniform vec4 uDiscR;     // its edges (AU): from, to (0: no disc), solid to, solid from (0: from the start)
     uniform vec4 uStar;      // the star's ball (view space, AU), its radius (AU; 0: none)
     uniform float uScale;    // the pass's background scale
-    varying vec3 vView;
-    varying float vFade;
     float discCover(float r) {
         if (r < uDiscR.x) return 0.0;
         float o = 1.0 - smoothstep(uDiscR.z, uDiscR.y, r);
         if (uDiscR.w > 0.0) o *= smoothstep(uDiscR.x, uDiscR.w, r);
         return o;
     }
-    void main() {
-        float L = length(vView);
-        vec3 D = vView / L;
+    float overCover(vec3 at, float surface) {
+        float L = length(at);
+        vec3 D = at / L;
         // Where the way on enters the star
         float tStar = 1e30;
         if (uStar.w > 0.0) {
@@ -516,7 +589,7 @@ const lineOverFragmentShader = /* glsl */ `
             float q = b * b - (dot(uStar.xyz, uStar.xyz) - uStar.w * uStar.w);
             if (q > 0.0 && b + sqrt(q) > 0.0) tStar = max(b - sqrt(q), 0.0);
         }
-        if (tStar < L) discard;
+        if (tStar < L) return 0.0;
         // The shadow behind it: the ray's impact parameter (rg, as the pass)
         // under the critical one, its closest approach past the line
         vec3 h = uHole.xyz;
@@ -532,11 +605,22 @@ const lineOverFragmentShader = /* glsl */ `
             float t = dot(h, uDiscN) / dn;
             if (t > 0.0) {
                 float o = discCover(length(D * t - h));
-                if (t < L) front = 1.0 - o;
+                bool onFace = abs(t - L) * abs(dn) < surface;
+                if (t < L && !onFace) front = 1.0 - o;
                 else if (t < tStar) behind = 1.0 - (1.0 - behind) * (1.0 - o);
             }
         }
-        float a = uOpacity * vFade * front * behind;
+        return front * behind;
+    }
+`;
+const lineOverFragmentShader = /* glsl */ `
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    varying vec3 vView;
+    varying float vFade;
+    ${OVER_COVER}
+    void main() {
+        float a = uOpacity * vFade * overCover(vView, 0.0);
         if (a < 0.002) discard;
         gl_FragColor = vec4(uColor * uScale, a);
     }
@@ -614,6 +698,7 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
     // star's surface), the spin's (and the orbit's) axis
     const fed = systems.map((sys, i) => (sys.kind !== 'fed' ? null : {
         mesh: null,
+        stream: null,
         axis: new THREE.Vector3(...sys.orbit.normal),
         // The spin's: along the orbit's, or measured apart from it (MAXI
         // J1820+070); the jet's line goes along it
@@ -645,6 +730,72 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
             layer.scene.add(f.mesh);
         }
         return f.mesh;
+    };
+    // A fed star's stream (made when first shown), in the
+    // star's frame like its Roche surface; null where it has none (Cygnus
+    // X-1: fed by its wind)
+    const streamMeshes = (i) => {
+        const f = fed[i];
+        const sys = systems[i];
+        if (!sys.stream) return null;
+        if (!f.stream) {
+            const st = sys.stream;
+            const n = st.xy.length / 2;
+            const pts = [];
+            for (let k = 0; k < n; k++) pts.push(new THREE.Vector3(st.xy[2 * k], st.xy[2 * k + 1], 0));
+            const geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), STREAM_SEGMENTS[0], st.width / 2, STREAM_SEGMENTS[1], false);
+            // Each ring of the tube: its share along the stream (TubeGeometry
+            // places them evenly by length, as the build's samples)
+            const count = geometry.attributes.position.count;
+            const tau = new Float32Array(count);
+            const column = new Float32Array(count);
+            const along = new Float32Array(count);
+            const tau0 = Math.max(...st.tau);
+            for (let v = 0; v < count; v++) {
+                const ring = Math.floor(v / (STREAM_SEGMENTS[1] + 1));
+                const x = ring / STREAM_SEGMENTS[0] * (n - 1);
+                const k = Math.min(Math.floor(x), n - 2);
+                const u = x - k;
+                tau[v] = st.tau[k] * (1 - u) + st.tau[k + 1] * u;
+                column[v] = tau[v] / tau0;
+                along[v] = ring / STREAM_SEGMENTS[0];
+            }
+            geometry.setAttribute('tau', new THREE.BufferAttribute(tau, 1));
+            geometry.setAttribute('column', new THREE.BufferAttribute(column, 1));
+            geometry.setAttribute('along', new THREE.BufferAttribute(along, 1));
+            const colour = new THREE.Color().fromArray(colours[i]);
+            const own = {
+                uColor: { value: new THREE.Vector3(colour.r ** 2.2, colour.g ** 2.2, colour.b ** 2.2) },
+                uHalpha: { value: new THREE.Vector3(...H_ALPHA_RGB) },
+                uMode: { value: 0 },
+                uFade: { value: 1 },
+                uRim: { value: st.rim ?? 1 },
+                uSurface: { value: 0 },
+            };
+            // Premultiplied (the over copy's colour scaled as the pass's)
+            const material = (over) => new THREE.ShaderMaterial({
+                uniforms: over ? { ...overShared, ...own } : own,
+                vertexShader: streamVertexShader,
+                fragmentShader: streamFragment(over),
+                transparent: true,
+                depthWrite: false,
+                depthTest: !over,
+                blending: THREE.CustomBlending,
+                blendSrc: THREE.OneFactor,
+                blendDst: THREE.OneMinusSrcAlphaFactor,
+            });
+            const tube = new THREE.Mesh(geometry, material(false));
+            // Its copy over the lens pass (see updateLines)
+            const tubeOver = new THREE.Mesh(geometry, material(true));
+            for (const [m, scene] of [[tube, layer.scene], [tubeOver, lines.scene]]) {
+                m.matrixAutoUpdate = false;
+                m.frustumCulled = false;
+                m.visible = false;
+                scene.add(m);
+            }
+            f.stream = { tube, tubeOver };
+        }
+        return f.stream;
     };
     // The jet's line: both ways along the axis, placed by its matrix
     const jetGeometry = new THREE.BufferGeometry();
@@ -758,7 +909,8 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
         // camera: the master camera (ly); t: the clock's year; height: the
         // view's CSS px; opts: {visible, orbits (lines on), selected (index
         // or null), view (riding along with a hole: {index, at (the camera
-        // from it, ly, exact)}, or null)}
+        // from it, ly, exact)}, or null), halpha (a fed star's stream as in
+        // hydrogen light)}
         update(camera, t, height, opts) {
             shownAll = opts.visible;
             let nearest = Infinity;
@@ -806,7 +958,11 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
                 }
                 orbitLines.forEach((line, i) => { if (line) line.visible = i === active; });
                 clusterStars.forEach((points, i) => { if (points) points.visible = i === active; });
-                fed.forEach((f, i) => { if (f?.mesh && i !== active) f.mesh.visible = false; });
+                fed.forEach((f, i) => {
+                    if (i === active) return;
+                    if (f?.mesh) f.mesh.visible = false;
+                    if (f?.stream) f.stream.tube.visible = f.stream.tubeOver.visible = false;
+                });
             }
             starPoints.visible = Boolean(sys.star);
             if (!sys.star) {
@@ -855,6 +1011,14 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
                 mesh.matrixWorldNeedsUpdate = true;
                 mesh.visible = starPx > DISC_MIN_PX;
                 disc.visible = false;
+                // Its stream, on the same frame
+                const sm = streamMeshes(active);
+                if (sm) {
+                    sm.tube.matrix.copy(mesh.matrix);
+                    sm.tube.matrixWorldNeedsUpdate = true;
+                    sm.tube.visible = mesh.visible;
+                    sm.tube.material.uniforms.uMode.value = opts.halpha ? 1 : 0;
+                }
             } else {
                 disc.position.copy(star);
                 starPx = sys.star.radius_au * focal / toStar;
@@ -939,7 +1103,18 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
             orbitOvers.forEach((over) => { if (over) over.visible = false; });
             sync(orbitOvers[active], orbitLines[active]);
             sync(jetOver, jet);
-            lines.visible = orbitOvers[active].visible || jetOver.visible;
+            // The stream: its copy, over the disc
+            const sm = f?.stream;
+            if (sm) {
+                sm.tubeOver.visible = sm.tube.visible;
+                if (sm.tubeOver.visible) {
+                    sm.tubeOver.matrix.copy(sm.tube.matrix);
+                    sm.tubeOver.matrixWorldNeedsUpdate = true;
+                    sm.tubeOver.material.uniforms.uSurface.value = sys.stream.width / 2 * separation;
+                    sm.tubeOver.material.uniforms.uMode.value = sm.tube.material.uniforms.uMode.value;
+                }
+            }
+            lines.visible = orbitOvers[active].visible || jetOver.visible || Boolean(sm?.tubeOver.visible);
         },
 
         // The active hole for the lens pass ({at: AU in this layer, rgAu,
@@ -1087,6 +1262,9 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
                 f.disc.texture.dispose();
                 f.mesh?.geometry.dispose();
                 f.mesh?.material.dispose();
+                f.stream?.tube.geometry.dispose();
+                f.stream?.tube.material.dispose();
+                f.stream?.tubeOver.material.dispose();
             });
             jetGeometry.dispose();
             jet.material.dispose();

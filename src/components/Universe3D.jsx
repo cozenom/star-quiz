@@ -643,6 +643,9 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
     // shown?, a system's card (its index), the data, and the close-up on
     // screen (its index, for the legend; null: none)
     const [showBlackHoles, setShowBlackHoles] = useState(true);
+    // A fed star's stream as in hydrogen light (Hα, as telescopes see it in
+    // emission lines) instead of as the eye would (nearly see-through)
+    const [showStreamHa, setShowStreamHa] = useState(false);
     const [selectedBh, setSelectedBh] = useState(null);
     const [bhData, setBhData] = useState(null);
     const [bhShown, setBhShown] = useState(null);
@@ -804,7 +807,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         [constellationData, selectedAbbrev]
     );
 
-    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, showGc, showRadioFlow, showBlackHoles, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster, selectedGc, selectedBh };
+    optionsRef.current = { showLines, lineKinds, showLabels, trueColors, showPlanets, showSmallBodies, showOort, showGalaxy, showMasers, showClusters, showBand, showDust, showFarStars, farDepth, showHaloStars, showGc, showRadioFlow, showBlackHoles, showStreamHa, selectedAbbrev, selectedHips, selectedRing, selectedRegion, selectedGalaxy, selectedMaser, selectedCluster, selectedGc, selectedBh };
 
     const selectStar = (index) => {
         setSelectedBody(null);
@@ -2540,6 +2543,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     orbits: o.showLines && o.lineKinds.bhOrbits,
                     selected: o.selectedBh,
                     view: bhViewNow(),
+                    halpha: o.showStreamHa,
                 });
                 if (o.selectedBh !== null) {
                     placeRing(selectedRing, bh.active() === o.selectedBh && bh.shadowPx() > 4 ? null : bh.holeLy(o.selectedBh, year, bhNow).toArray());
@@ -3572,7 +3576,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     </label>
                     <label
                         className="universe-3d-checkbox"
-                        title="Gaia BH1, BH2 and BH3, dormant black holes found from the wobble of the star going round each, and Cygnus X-1, V404 Cygni, MAXI J1820+070 and GRS 1915+105, fed by theirs, with discs and spin: on their measured orbits, moving with the clock; and OGLE-2011-BLG-0462, a lone black hole found by the starlight it bent; fly close to see the black hole's shadow and the light bent round it"
+                        title="26 black holes of stars: Gaia BH1, BH2 and BH3, dormant, found from the wobble of the star going round each; 21 fed by theirs (Cygnus X-1, V404 Cygni, MAXI J1820+070, GRS 1915+105 and BlackCAT's other 17 confirmed), with discs and spin; on their measured orbits, moving with the clock; OGLE-2011-BLG-0462, a lone one found by the starlight it bent; and Omega Centauri's, at the cluster's heart. Fly close to see the black hole's shadow and the light bent round it"
                     >
                         <input
                             type="checkbox"
@@ -3581,6 +3585,19 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                         />
                         <span className="universe-3d-swatch" style={{ background: '#000', border: '2px solid #c4b5fd' }} />
                         Stellar black holes
+                    </label>
+                    <label
+                        className={`universe-3d-checkbox ${showBlackHoles ? '' : 'disabled'}`}
+                        title="The gas streaming from a fed black hole's star to its disc as telescopes see it, glowing in hydrogen's red emission line (Hα), instead of as the eye would: thin and nearly see-through. Its path is computed from the orbit; its brightness here is ours"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={showStreamHa}
+                            disabled={!showBlackHoles}
+                            onChange={(e) => setShowStreamHa(e.target.checked)}
+                        />
+                        <span className="universe-3d-swatch" style={{ background: '#ff1a2a' }} />
+                        Black holes&apos; gas streams in hydrogen light (Hα)
                     </label>
                     <label
                         className={`universe-3d-checkbox ${showGalaxy ? '' : 'disabled'}`}
@@ -3672,7 +3689,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
                     <GalacticCentreLegend showOrbits={linesOn('gcOrbits')} radio={showRadioFlow} onOpen={() => openGalaxyCard('centre')} />
                 )}
                 {bhShown !== null && bhData && (
-                    <BlackHoleLegend sys={bhData.systems[bhShown]} showOrbits={linesOn('bhOrbits')} onOpen={() => setSelectedBh(bhShown)} />
+                    <BlackHoleLegend sys={bhData.systems[bhShown]} showOrbits={linesOn('bhOrbits')} halpha={showStreamHa} onOpen={() => setSelectedBh(bhShown)} />
                 )}
             </div>
             {selectedGalaxy && galaxyCards && (

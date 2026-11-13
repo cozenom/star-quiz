@@ -64,6 +64,14 @@ function fedRows(sys) {
         rows.push(['Disc', <>quiet: from about {km(d.r_in_rg * hole.rg_km)} to {km(d.r_out_rg * hole.rg_km)} from the black hole, about {kelvin(d.t_in_k)}
             <div className="star-info-muted">giving {Math.round(d.veiling * 100)}% of the system&apos;s {band(d.veiling_nm)} light{d.veiling_note && `: ${d.veiling_note}`}; inside it, a thin hot flow that doesn&apos;t show to the eye{d.r_in_note && `; its inner edge ${d.r_in_note}`}{d.r_out_note && `; its outer edge ${d.r_out_note}`}</div></>]);
     }
+    const st = sys.stream;
+    if (st) {
+        const widthKm = st.width * sys.orbit.a_au * 149597870.7;
+        rows.push(['Stream', <>gas falling from the star&apos;s tip to the disc&apos;s rim at {fmt(st.speed_max_km_s)} km/s, some of it overflowing the rim across the disc&apos;s faces (drawn fading out: how much isn&apos;t measured)
+            <div className="star-info-muted">about {sig(st.mdot_g_s / 1e15, 2)} billion tonnes a second, {st.mdot_note}; about {km(widthKm)} wide, so thin it&apos;s nearly see-through: to the eye it would barely show, but it glows in hydrogen&apos;s red light (the &quot;gas streams in hydrogen light&quot; option). {st.spot
+                ? `Where it strikes the rim it would make a hot spot of about ${kelvin(st.spot.t_k)}, ${sig(st.spot.v_share * 100, 2)}% of the star's visible light (not drawn)`
+                : 'It strikes the rim too gently to stand out (no hotter than the rim)'}. Its path, width and hot spot ours: computed from the orbit (Lubow &amp; Shu 1975)</div></>]);
+    }
     if (sys.orbit.misalignment_deg > 5) {
         rows.push(['Tilted spin', <>its spin {Math.round(sys.orbit.misalignment_deg)}&deg; from its orbit&apos;s axis
             <div className="star-info-muted">the jets point along the spin, the disc lies in the orbit&apos;s plane; at least 40&deg; apart (from the jets&apos; angle and the orbit&apos;s, its polarised light), the smallest that fits is drawn</div></>]);
@@ -253,7 +261,7 @@ export default function BlackHoleInfoCard({ sys, data, time, onView, onCloseUp, 
 }
 
 // The close-up's key, shown while it is on screen
-export function BlackHoleLegend({ sys, showOrbits, onOpen }) {
+export function BlackHoleLegend({ sys, showOrbits, halpha, onOpen }) {
     if (!sys.star) {
         const items = [
             sys.fast_stars && { key: 'fast', swatch: <span className="universe-3d-swatch" style={{ background: '#ffd9a8' }} />, name: 'The fast stars, moving as measured (their depths drawn: not measured)' },
@@ -266,6 +274,7 @@ export function BlackHoleLegend({ sys, showOrbits, onOpen }) {
     const items = [
         { key: 'star', swatch: <span className="universe-3d-swatch" style={{ background: starCss(sys) }} />, name: isFed ? 'Its star, its shape the space its gravity rules' : 'Its star, at its true brightness' },
         isFed && { key: 'disc', swatch: <span className="universe-3d-swatch" style={{ background: sys.disc.state === 'soft' ? 'radial-gradient(circle, #ffffff 30%, #cfe0ff 60%, #ffb46b)' : '#ff8a3d' }} />, name: sys.disc.state === 'soft' ? 'Its disc, at its temperatures: white-hot inside' : 'Its disc, quiet and faint' },
+        sys.stream && halpha && { key: 'stream', swatch: <span className="universe-3d-swatch" style={{ background: '#ff1a2a' }} />, name: 'Its gas stream in hydrogen light (Hα: as telescopes see it, not the eye)' },
         showOrbits && { key: 'orbit', swatch: <span className="galaxy-legend-line" style={{ background: starCss(sys) }} />, name: 'The star\'s measured orbit round the black hole' },
         showOrbits && isFed && sys.jet && { key: 'jet', swatch: <span className="galaxy-legend-line" style={{ background: hex(BH_JET_COLOR) }} />, name: 'Its radio jet\'s direction (not visible to the eye)' },
         { key: 'marker', swatch: <span className="universe-3d-swatch" style={{ background: 'transparent', border: `2px solid ${hex(BH_MARKER_COLOR)}` }} />, name: 'The black hole (marker, until its shadow is big enough to see)' },
