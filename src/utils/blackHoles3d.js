@@ -460,18 +460,23 @@ const rocheFragmentShader = /* glsl */ `
 
 // The stream from a fed star (the build's: ballistic from L1 to the disc's
 // rim, Lubow & Shu 1975), a tube in the star's frame (as the Roche surface's:
-// separations, x towards the hole, z the orbit's axis). As the eye sees it:
-// gas at the star's temperature, as see-through as its optical depth there
-// (tau across it, the line of sight's share by the surface's slant): the
-// star's surface brightness times 1 - exp(-tau). In hydrogen light (Hα, the
-// option): how telescopes see it in emission lines, the brightness ours
-// (falling with the gas's column as it speeds up, the cube root). Past the disc's rim (sys.stream.rim, its share
+// separations, x towards the hole, z the orbit's axis). Its gas thins out
+// across it, no edge: a Gaussian (the isothermal stream's, Lubow & Shu;
+// sigma half its width c_s / Omega), the tube STREAM_SIGMAS of it out, each
+// pixel taking the column through the Gaussian at its sight line's offset
+// from the middle (b / R = sqrt(1 - slant^2) on a round tube). As the eye
+// sees it: gas at the star's temperature, as see-through as its optical
+// depth there (tau through the middle, by that column): the star's surface
+// brightness times 1 - exp(-tau). In hydrogen light (Hα, the option): how
+// telescopes see it in emission lines, the brightness ours (falling with
+// the gas's column as it speeds up, the cube root). Past the disc's rim (sys.stream.rim, its share
 // along it) the part that overflows the rim, over and under the disc's faces
 // to its closest approach to the hole (Lubow 1989): fading to nothing by
 // there (ours: how much overflows isn't measured). With the lens pass on,
 // drawn again after it where the disc's behind, as the lines are (and the
 // overflow on its faces)
-const STREAM_SEGMENTS = [160, 10];
+const STREAM_SEGMENTS = [160, 24];
+const STREAM_SIGMAS = 3;
 const H_ALPHA_RGB = [1.0, 0.06, 0.1];
 const streamVertexShader = /* glsl */ `
     attribute float tau;
@@ -510,13 +515,15 @@ const streamFragment = (over) => /* glsl */ `
     ${over ? OVER_COVER : 'const float uScale = 1.0;'}
     void main() {
         float slant = abs(dot(normalize(vNormal), normalize(vView)));
+        float off = ${STREAM_SIGMAS.toFixed(1)} * sqrt(max(1.0 - slant * slant, 0.0));   // b / sigma
+        float across = exp(-0.5 * off * off);
         float a;
         vec3 c;
         if (uMode < 0.5) {
-            a = 1.0 - exp(-vTau * slant);
+            a = 1.0 - exp(-vTau * across);
             c = uColor;
         } else {
-            a = 0.85 * pow(vColumn, 1.0 / 3.0) * sqrt(slant);
+            a = 0.85 * pow(vColumn, 1.0 / 3.0) * across;
             c = uHalpha;
         }
         a *= uFade * (1.0 - smoothstep(uRim, 1.0, vAlong));
@@ -743,7 +750,7 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
             const n = st.xy.length / 2;
             const pts = [];
             for (let k = 0; k < n; k++) pts.push(new THREE.Vector3(st.xy[2 * k], st.xy[2 * k + 1], 0));
-            const geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), STREAM_SEGMENTS[0], st.width / 2, STREAM_SEGMENTS[1], false);
+            const geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), STREAM_SEGMENTS[0], STREAM_SIGMAS * st.width / 2, STREAM_SEGMENTS[1], false);
             // Each ring of the tube: its share along the stream (TubeGeometry
             // places them evenly by length, as the build's samples)
             const count = geometry.attributes.position.count;
@@ -1110,7 +1117,7 @@ export function buildBlackHoles({ layer, lines, origin }, data, pixelRatio, { ma
                 if (sm.tubeOver.visible) {
                     sm.tubeOver.matrix.copy(sm.tube.matrix);
                     sm.tubeOver.matrixWorldNeedsUpdate = true;
-                    sm.tubeOver.material.uniforms.uSurface.value = sys.stream.width / 2 * separation;
+                    sm.tubeOver.material.uniforms.uSurface.value = STREAM_SIGMAS * sys.stream.width / 2 * separation;
                     sm.tubeOver.material.uniforms.uMode.value = sm.tube.material.uniforms.uMode.value;
                 }
             }

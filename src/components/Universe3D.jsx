@@ -879,7 +879,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         // The stellar black holes' close-up (AU, at the nearest one's centre
         // of mass), before the lens pass: its star's light is bent too
         const bhLayer = createBlackHoleLayer();
-        const layers = [skyLayer, starLayer, bhLayer.layer, bhLayer.lines, gcLayer.layer, starDisc.layer, solarLayer];
+        // The universe layer's hover and selection rings (and Earth's far
+        // marker): screen marks, drawn after the lens pass so it doesn't bend
+        // them (ly, as the universe layer)
+        const markLayer = createLayer({ name: 'marks', unit: 1, near: STAR_LAYER_NEAR, far: 1e6 });
+        const layers = [skyLayer, starLayer, bhLayer.layer, bhLayer.lines, markLayer, gcLayer.layer, starDisc.layer, solarLayer];
         const scene = starLayer.scene;
         const starCamera = starLayer.camera;  // for picking and labels
         const solarCamera = solarLayer.camera;
@@ -1270,10 +1274,11 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         );
         scene.add(sun);
 
-        // One hover/selected ring pair per layer
+        // One hover/selected ring pair per layer (the universe layer's in
+        // markLayer: not lensed)
         const hoverRing = makeRing(0xcbd5e1, 0.6, 26 * pixelRatio);
         const selectedRing = makeRing(0xfacc15, 0.9, 30 * pixelRatio);
-        scene.add(hoverRing, selectedRing);
+        markLayer.scene.add(hoverRing, selectedRing);
         const bodyHoverRing = makeRing(0xcbd5e1, 0.6, 26 * pixelRatio);
         const bodySelectedRing = makeRing(0xfacc15, 0.9, 30 * pixelRatio);
         // Earth is hard to find: it gets a blue ring while its sphere is small
@@ -1282,7 +1287,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         const earthMarkerNear = makeRing(0x60a5fa, 0.9, 18 * pixelRatio);
         const earthMarkerFar = makeRing(0x60a5fa, 0.9, 18 * pixelRatio);
         solarLayer.scene.add(bodyHoverRing, bodySelectedRing, earthMarkerNear);
-        scene.add(earthMarkerFar);
+        markLayer.scene.add(earthMarkerFar);
 
         // Everything renders through this composer, in linear light: colours
         // add up in a half-float buffer, as light does, and go to sRGB once
@@ -1302,7 +1307,7 @@ function Universe3D({ constellationData, stars3d, planetFacts, moonsData, smallB
         composer.insertPass(farStarsPass, layers.indexOf(bhLayer.layer) + 2);
         // The far layers all round the camera, for rays it bends off the
         // screen
-        const lensSky = createLensSky(renderer, [skyLayer, starLayer], { lite, hide: [hoverRing, selectedRing, earthMarkerFar] });
+        const lensSky = createLensSky(renderer, [skyLayer, starLayer], { lite });
         const glarePass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, GLARE_THRESHOLD);
         glarePass.materialHighPassFilter.fragmentShader = glareHighPassShader;
         composer.addPass(glarePass);
